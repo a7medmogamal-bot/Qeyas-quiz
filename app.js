@@ -1,9 +1,9 @@
 /* ============================================================
-   QeyasQuiz — Application Logic
+   QeyasQuiz — Application Logic (Arabic)
    ============================================================ */
 
 /* ============================================================
-   CONFIG BOOTSTRAP (Vercel Env → /api/config, fallback hardcoded)
+   CONFIG BOOTSTRAP
    ============================================================ */
 let APP_CONFIG = null;
 
@@ -42,7 +42,7 @@ import {
   onAuthStateChanged, setPersistence, browserLocalPersistence
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
-  getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc,
+  getFirestore, doc, getDoc, setDoc, updateDoc,
   collection, addDoc, query, where, orderBy, limit, getDocs,
   serverTimestamp, runTransaction, Timestamp, onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
@@ -71,315 +71,401 @@ const CLOUDINARY = {
 const SUBJECTS = [
   { id: "studies",     en: "Social Studies", ar: "دراسات" },
   { id: "arabic",      en: "Arabic",         ar: "عربي" },
-  { id: "english",     en: "English",        ar: "انجليزي" },
-  { id: "math",        en: "Mathematics",    ar: "رياضه" },
-  { id: "philosophy",  en: "Philosophy",     ar: "فلسفه" },
+  { id: "english",     en: "English",        ar: "إنجليزي" },
+  { id: "math",        en: "Mathematics",    ar: "رياضيات" },
+  { id: "philosophy",  en: "Philosophy",     ar: "فلسفة" },
   { id: "french",      en: "French",         ar: "فرنساوي" },
-  { id: "german",      en: "German",         ar: "الماني" },
+  { id: "german",      en: "German",         ar: "ألماني" },
   { id: "history",     en: "History",        ar: "تاريخ" },
   { id: "geography",   en: "Geography",      ar: "جغرافيا" },
-  { id: "programming", en: "Programming",    ar: "برمجه" },
+  { id: "programming", en: "Programming",    ar: "برمجة" },
   { id: "science",     en: "Science",        ar: "علوم" },
-  { id: "chemistry",   en: "Chemistry",      ar: "كيميا" },
-  { id: "physics",     en: "Physics",        ar: "فيزيا" },
-  { id: "biology",     en: "Biology",        ar: "احياء" }
+  { id: "chemistry",   en: "Chemistry",      ar: "كيمياء" },
+  { id: "physics",     en: "Physics",        ar: "فيزياء" },
+  { id: "biology",     en: "Biology",        ar: "أحياء" }
 ];
+
+const GRADE_LABELS = {
+  p1: "الأول الابتدائي", p2: "الثاني الابتدائي", p3: "الثالث الابتدائي",
+  p4: "الرابع الابتدائي", p5: "الخامس الابتدائي", p6: "السادس الابتدائي",
+  prep1: "الأول الإعدادي", prep2: "الثاني الإعدادي", prep3: "الثالث الإعدادي",
+  sec1: "الأول الثانوي", sec2: "الثاني الثانوي", sec3: "الثالث الثانوي"
+};
 
 function subjectLabel(id) {
   if (!id) return "—";
+  if (String(id).startsWith("custom:")) return String(id).slice(7);
   const s = SUBJECTS.find((x) => x.id === id);
-  if (!s) return id;
-  return currentLang === "ar" ? s.ar : s.en;
+  return s ? s.ar : id;
+}
+
+function gradeLabel(id) {
+  return GRADE_LABELS[id] || id || "—";
 }
 
 /* ============================================================
-   I18N — Full translations
+   I18N — عربي كامل
    ============================================================ */
 const I18N = {
-  en: {
-    "nav.features": "Features", "nav.how": "How it works", "nav.security": "Security",
-    "nav.signin": "Sign in", "nav.cta": "Get Started",
-    "nav.dashboard": "Dashboard", "nav.exams": "My Exams", "nav.bank": "Question Bank",
-    "nav.profile": "Profile", "nav.settings": "Settings", "nav.packages": "Packages",
-    "hero.eyebrow": "EdTech Platform", "hero.title": "Create. Publish. Assess.",
-    "hero.subtitle": "QeyasQuiz helps teachers create exams, deliver them securely, and grade with precision — all in one place.",
-    "hero.cta": "Create Your First Exam", "hero.secondary": "Sign in with Google",
-    "hero.point1": "Multiple exam forms", "hero.point2": "Automatic grading", "hero.point3": "Anti-cheat monitoring",
-    "features.title": "Built for serious assessment",
-    "features.subtitle": "Every tool a teacher needs, nothing they don't.",
-    "features.f1.title": "Exam Builder", "features.f1.text": "Six question types, drag-and-drop ordering, and automatic total score calculation.",
-    "features.f2.title": "Multiple Forms", "features.f2.text": "Create separate forms with different questions. Students get one at random.",
-    "features.f3.title": "Server-Authoritative Timer", "features.f3.text": "Timing is calculated from trusted server timestamps. Device clock changes have no effect.",
-    "features.f4.title": "Anti-Cheat Monitoring", "features.f4.text": "Tab switches, visibility changes and disconnects are logged for teacher review.",
-    "features.f5.title": "Automatic Grading", "features.f5.text": "Objective questions grade instantly. Essays and justifications stay manual.",
-    "features.f6.title": "Analytics", "features.f6.text": "Average score, hardest questions, completion time and per-topic breakdown.",
-    "how.title": "How it works", "how.subtitle": "From idea to result in three steps.",
-    "how.s1.title": "Create", "how.s1.text": "Build your exam with multiple forms, images, timing, and access rules.",
-    "how.s2.title": "Publish", "how.s2.text": "Share a secure link or QR code. Students open it and start instantly.",
-    "how.s3.title": "Assess", "how.s3.text": "Objective questions grade automatically. Review, add feedback, and publish results.",
-    "sec.title": "Secure by design",
-    "sec.subtitle": "The frontend is never trusted. Every critical action is validated on the backend.",
-    "sec.s1.title": "Server Timestamps", "sec.s1.text": "Exam timing and deadlines are enforced from trusted server time.",
-    "sec.s2.title": "Answer Key Protection", "sec.s2.text": "Correct answers are stored in a separate collection. Students can never read them.",
-    "sec.s3.title": "One Attempt Only", "sec.s3.text": "Duplicate attempts are blocked at the database level, not in the browser.",
-    "cta.title": "Start assessing smarter today", "cta.subtitle": "Free to start. No credit card. Sign in with Google and publish your first exam in minutes.",
-    "cta.primary": "Create Your First Exam", "cta.secondary": "Sign in with Google",
-    "footer.about": "About", "footer.privacy": "Privacy", "footer.terms": "Terms", "footer.contact": "Contact",
-    "footer.tagline": "Smart Exams. Better Assessment.",
-    "auth.signin": "Sign in", "auth.signup": "Sign up",
-    "auth.signin.title": "Welcome back", "auth.signin.subtitle": "Sign in to continue.",
-    "auth.signup.title": "Create your account", "auth.signup.subtitle": "Get started in seconds.",
-    "auth.google.signin": "Sign in with Google", "auth.google.signup": "Sign up with Google",
-    "login.connecting": "Connecting…",
-    "login.terms": "By continuing you agree to our", "login.termsLink": "Terms",
-    "login.and": "and", "login.privacyLink": "Privacy Policy",
-    "setup.title": "Complete your profile", "setup.subtitle": "This information appears on your exams and helps students identify you.",
-    "setup.photo.title": "Profile picture", "setup.photo.change": "Change picture",
-    "setup.photo.reset": "Use Google photo", "setup.photo.hint": "JPG, PNG or WebP. Max 2 MB.",
-    "setup.identity.title": "Identity",
-    "setup.username.label": "Username", "setup.username.hint": "3–24 characters. Letters, numbers, and underscore only.",
-    "setup.fullName.label": "Full name", "setup.fullName.hint": "Shown to students on exam pages.",
-    "setup.subjects.title": "Your subjects", "setup.subjects.hint": "Select all the subjects you teach. These will be available when creating exams.",
-    "setup.subjects.customLabel": "Add custom subject", "setup.subjects.addCustom": "Add",
-    "setup.signout": "Sign out", "setup.cancel": "Cancel", "setup.submit": "Complete Setup",
-    "dash.welcome.sub": "Here's what's happening with your exams.",
-    "dash.recentExams": "Recent Exams", "dash.activity": "Recent Activity",
-    "stat.totalExams": "Total Exams", "stat.activeExams": "Active Exams",
-    "stat.submitted": "Submitted Students", "stat.waiting": "Waiting for Grading",
-    "action.viewAll": "View all", "action.createExam": "Create Exam", "action.newExam": "New Exam",
-    "action.prev": "Previous", "action.next": "Next", "action.cancel": "Cancel",
-    "action.preview": "Preview", "action.publish": "Publish", "action.publishExam": "Publish Exam",
-    "action.addQuestion": "Add Question", "action.addForm": "Add Form",
-    "action.submit": "Submit", "action.submitExam": "Submit Exam",
-    "action.back": "Back", "action.save": "Save",
-    "action.goHome": "Go Home", "action.editProfile": "Edit", "action.deleteAccount": "Delete Account",
-    "action.open": "Open", "action.edit": "Edit", "action.share": "Share", "action.grade": "Grade",
-    "status.draft": "Draft", "status.scheduled": "Scheduled", "status.active": "Active",
-    "status.completed": "Completed", "status.submitted": "Submitted", "status.graded": "Graded",
-    "status.in_progress": "In Progress",
-    "filter.allStatus": "All statuses",
-    "empty.exams.title": "No exams yet", "empty.exams.text": "Create your first exam to get started.",
-    "empty.bank.title": "No saved questions", "empty.bank.text": "Save questions from your exams to reuse them later.",
-    "packages.title": "Packages", "packages.text": "Under development. Plans and pricing will be available soon.",
-    "builder.newExam": "New Exam",
-    "builder.step.info": "Info", "builder.step.questions": "Questions",
-    "builder.step.forms": "Forms", "builder.step.settings": "Settings",
-    "builder.step": "Step",
-    "builder.info.title": "Exam information", "builder.info.name": "Exam name",
-    "builder.info.subject": "Subject", "builder.info.selectSubject": "Select subject",
-    "builder.info.grade": "Grade", "builder.info.selectGrade": "Select grade",
-    "builder.questions.title": "Questions", "builder.questions.total": "Total:",
-    "builder.forms.title": "Exam forms",
-    "builder.forms.hint": "Each form has its own questions. Students receive one form at random.",
-    "builder.settings.title": "Exam settings",
-    "builder.settings.displayMode": "Display mode",
-    "builder.settings.mode.scroll": "Scroll", "builder.settings.mode.scrollDesc": "All questions on one page",
-    "builder.settings.mode.single": "One by One", "builder.settings.mode.singleDesc": "One question per screen",
-    "builder.settings.startAt": "Opens at", "builder.settings.endAt": "Closes at",
-    "builder.settings.startHint": "Students cannot start before this time.",
-    "builder.settings.endHint": "Students cannot start after this time.",
-    "builder.settings.duration": "Duration (minutes)",
-    "builder.settings.accessCodeValue": "Access code (optional)",
-    "builder.settings.shuffle": "Shuffle question order per student",
-    "builder.settings.accessCode": "Require access code",
-    "builder.settings.fullscreen": "Require fullscreen during exam",
-    "question.text": "Question text…",
-    "question.correct": "Correct answer", "question.model": "Model answer",
-    "question.score": "Score", "question.option": "Option", "question.addOption": "Add option",
-    "question.true": "True", "question.false": "False",
-    "common.questions": "questions", "common.points": "pts", "common.saved": "Saved", "common.saving": "Saving…",
-    "common.saveFailed": "Save failed", "common.teacher": "Teacher", "common.duration": "Duration",
-    "common.subject": "Subject", "common.grade": "Grade", "common.totalPossible": "Total possible",
-    "common.saveGrading": "Save grading", "common.publishResult": "Publish result",
-    "common.student": "Student", "common.status": "Status", "common.score": "Score",
-    "common.started": "Started", "common.submitted": "Submitted", "common.notFound": "Not found",
-    "exam.loading": "Loading exam…", "exam.connected": "Connected",
-    "exam.entry.studentName": "Your full name", "exam.entry.accessCode": "Access code",
-    "exam.entry.start": "Start Exam", "exam.entry.foot": "Make sure your name is correct — it will be used for grading.",
-    "entry.badge": "Exam", "entry.teacher": "Teacher", "entry.subtitle": "Please review the details and enter your name to begin.",
-    "exam.resume.title": "Resume your exam?", "exam.resume.text": "You have an exam in progress. Your answers and remaining time have been preserved.",
-    "exam.resume.continue": "Resume Exam",
-    "exam.confirm.title": "Submit exam?", "exam.confirm.text": "Are you sure you want to submit your exam? You cannot make changes after submission.",
-    "exam.confirm.unanswered": "Unanswered questions",
-    "exam.confirm.submitAnyway": "Submit anyway", "exam.confirm.goToFirst": "Go to first",
-    "exam.update.title": "Exam Updated", "exam.update.text": "The teacher has updated this exam. Refresh to load the latest version. Your answers will be preserved.",
-    "exam.update.refresh": "Refresh Exam",
-    "exam.offline": "Connection lost. Your answers are saved locally and will sync when you reconnect.",
-    "exam.timeUp": "Time is up. Exam submitted automatically.",
-    "exam.newQuestion": "New question added by teacher.",
-    "result.loading": "Loading result…", "result.waiting": "Waiting for grading.",
-    "result.feedback": "Teacher Feedback", "result.review": "Answer Review",
-    "result.reviewSub": "See your answers alongside the correct answers.",
-    "settings.appearance": "Appearance", "settings.light": "Light mode", "settings.dark": "Dark mode",
-    "settings.language": "Language",
-    "profile.subjects": "Subjects", "profile.danger": "Danger zone",
-    "profile.dangerText": "Deleting your account removes all your exams, students, and results permanently.",
-    "security.tabTitle": "Tab Switch Detected", "security.tabHidden": "You switched away from the exam. This event has been recorded.",
-    "security.fsTitle": "Fullscreen Required", "security.fsExit": "You exited fullscreen. Please return to fullscreen to continue."
-  },
   ar: {
-    "nav.features": "المميزات", "nav.how": "كيف يعمل", "nav.security": "الأمان",
-    "nav.signin": "تسجيل الدخول", "nav.cta": "ابدأ الآن",
-    "nav.dashboard": "الرئيسية", "nav.exams": "امتحاناتي", "nav.bank": "بنك الأسئلة",
-    "nav.profile": "الملف الشخصي", "nav.settings": "الإعدادات", "nav.packages": "الباقات",
-    "hero.eyebrow": "منصة تعليمية", "hero.title": "أنشئ. انشر. قيّم.",
-    "hero.subtitle": "QeyasQuiz تساعد المعلمين على إنشاء الامتحانات وتسليمها بأمان وتصحيحها بدقة.",
-    "hero.cta": "أنشئ أول امتحان", "hero.secondary": "الدخول بحساب Google",
-    "hero.point1": "نماذج امتحان متعددة", "hero.point2": "تصحيح تلقائي", "hero.point3": "مراقبة ضد الغش",
+    // NAV
+    "nav.features": "المميزات",
+    "nav.how": "كيف يعمل",
+    "nav.security": "الأمان",
+    "nav.signin": "تسجيل الدخول",
+    "nav.cta": "ابدأ الآن",
+    "nav.dashboard": "الرئيسية",
+    "nav.exams": "امتحاناتي",
+    "nav.bank": "بنك الأسئلة",
+    "nav.profile": "الملف الشخصي",
+    "nav.settings": "الإعدادات",
+    "nav.packages": "الباقات",
+
+    // HERO
+    "hero.eyebrow": "منصة تعليمية",
+    "hero.title": "أنشئ. انشر. قيّم.",
+    "hero.subtitle": "QeyasQuiz تساعد المعلمين على إنشاء الامتحانات وتسليمها بأمان وتصحيحها بدقة — كل ذلك في مكان واحد.",
+    "hero.cta": "أنشئ أول امتحان",
+    "hero.secondary": "الدخول بحساب Google",
+    "hero.point1": "نماذج امتحان متعددة",
+    "hero.point2": "تصحيح تلقائي",
+    "hero.point3": "مراقبة ضد الغش",
+    "hero.badge": "مباشر",
+    "hero.progress": "سؤال 5 من 20",
+    "hero.sampleQ": "أي من الأعداد الآتية عدد أولي؟",
+    "hero.progressLabel": "التقدم 25%",
+
+    // FEATURES
     "features.title": "مبنية للتقييم الجاد",
     "features.subtitle": "كل أداة يحتاجها المعلم، بدون زيادات.",
-    "features.f1.title": "منشئ الامتحانات", "features.f1.text": "ستة أنواع أسئلة، ترتيب بالسحب، وحساب تلقائي للدرجة الكلية.",
-    "features.f2.title": "نماذج متعددة", "features.f2.text": "أنشئ نماذج بأسئلة مختلفة. الطالب يحصل على نموذج عشوائي.",
-    "features.f3.title": "مؤقت بوقت السيرفر", "features.f3.text": "الوقت محسوب من توقيت السيرفر الموثوق. تغيير ساعة الجهاز لا يؤثر.",
-    "features.f4.title": "مراقبة ضد الغش", "features.f4.text": "تسجيل تبديل التاب وتغيير التركيز وانقطاع الاتصال لمراجعة المعلم.",
-    "features.f5.title": "تصحيح تلقائي", "features.f5.text": "الأسئلة الموضوعية تُصحح فورًا. المقالية والتبرير يدويًا.",
-    "features.f6.title": "تحليلات", "features.f6.text": "متوسط الدرجات، أصعب الأسئلة، وقت الإنجاز، وتحليل حسب الموضوع.",
-    "how.title": "كيف يعمل", "how.subtitle": "من الفكرة إلى النتيجة في ثلاث خطوات.",
-    "how.s1.title": "أنشئ", "how.s1.text": "ابنِ امتحانك بنماذج متعددة وصور وتوقيت وقواعد وصول.",
-    "how.s2.title": "انشر", "how.s2.text": "شارك رابطًا آمنًا أو كود QR. الطلاب يفتحون ويبدأون فورًا.",
-    "how.s3.title": "قيّم", "how.s3.text": "الأسئلة الموضوعية تُصحح تلقائيًا. راجع، أضف ملاحظات، وانشر النتائج.",
-    "sec.title": "آمن بالتصميم", "sec.subtitle": "لا نثق أبدًا في الواجهة. كل إجراء حساس يُتحقق منه على السيرفر.",
-    "sec.s1.title": "توقيت السيرفر", "sec.s1.text": "أوقات الامتحان والمواعيد النهائية مفروضة من وقت السيرفر الموثوق.",
-    "sec.s2.title": "حماية الإجابات", "sec.s2.text": "الإجابات الصحيحة محفوظة في collection منفصلة. الطالب لا يمكنه قراءتها أبدًا.",
-    "sec.s3.title": "محاولة واحدة فقط", "sec.s3.text": "تكرار المحاولات ممنوع على مستوى قاعدة البيانات، لا في المتصفح.",
-    "cta.title": "ابدأ التقييم الذكي اليوم", "cta.subtitle": "ابدأ مجانًا. بدون بطاقة. سجل بحساب Google وانشر أول امتحان في دقائق.",
-    "cta.primary": "أنشئ أول امتحان", "cta.secondary": "الدخول بحساب Google",
-    "footer.about": "من نحن", "footer.privacy": "الخصوصية", "footer.terms": "الشروط", "footer.contact": "اتصل بنا",
+    "features.f1.title": "منشئ الامتحانات",
+    "features.f1.text": "ستة أنواع أسئلة، ترتيب بالسحب، وحساب تلقائي للدرجة الكلية.",
+    "features.f2.title": "نماذج متعددة",
+    "features.f2.text": "أنشئ نماذج بأسئلة مختلفة. الطالب يحصل على نموذج عشوائي.",
+    "features.f3.title": "مؤقت بوقت السيرفر",
+    "features.f3.text": "الوقت محسوب من توقيت السيرفر الموثوق. تغيير ساعة الجهاز لا يؤثر.",
+    "features.f4.title": "مراقبة ضد الغش",
+    "features.f4.text": "تسجيل تبديل التاب وتغيير التركيز وانقطاع الاتصال لمراجعة المعلم.",
+    "features.f5.title": "تصحيح تلقائي",
+    "features.f5.text": "الأسئلة الموضوعية تُصحح فورًا. المقالية والتبرير يدويًا.",
+    "features.f6.title": "تحليلات",
+    "features.f6.text": "متوسط الدرجات، أصعب الأسئلة، وقت الإنجاز، وتحليل حسب الموضوع.",
+
+    // HOW
+    "how.title": "كيف يعمل",
+    "how.subtitle": "من الفكرة إلى النتيجة في ثلاث خطوات.",
+    "how.s1.title": "أنشئ",
+    "how.s1.text": "ابنِ امتحانك بنماذج متعددة وصور وتوقيت وقواعد وصول.",
+    "how.s2.title": "انشر",
+    "how.s2.text": "شارك رابطًا آمنًا أو كود QR. الطلاب يفتحون ويبدأون فورًا.",
+    "how.s3.title": "قيّم",
+    "how.s3.text": "الأسئلة الموضوعية تُصحح تلقائيًا. راجع، أضف ملاحظات، وانشر النتائج.",
+
+    // SECURITY
+    "sec.title": "آمن بالتصميم",
+    "sec.subtitle": "لا نثق أبدًا في الواجهة. كل إجراء حساس يُتحقق منه على السيرفر.",
+    "sec.s1.title": "توقيت السيرفر",
+    "sec.s1.text": "أوقات الامتحان والمواعيد النهائية مفروضة من وقت السيرفر الموثوق.",
+    "sec.s2.title": "حماية الإجابات",
+    "sec.s2.text": "الإجابات الصحيحة محفوظة في مجموعة منفصلة. الطالب لا يمكنه قراءتها أبدًا.",
+    "sec.s3.title": "محاولة واحدة فقط",
+    "sec.s3.text": "تكرار المحاولات ممنوع على مستوى قاعدة البيانات، لا في المتصفح.",
+
+    // CTA
+    "cta.title": "ابدأ التقييم الذكي اليوم",
+    "cta.subtitle": "ابدأ مجانًا. بدون بطاقة. سجّل بحساب Google وانشر أول امتحان في دقائق.",
+    "cta.primary": "أنشئ أول امتحان",
+    "cta.secondary": "الدخول بحساب Google",
+
+    // FOOTER
+    "footer.about": "من نحن",
+    "footer.privacy": "الخصوصية",
+    "footer.terms": "الشروط",
+    "footer.contact": "اتصل بنا",
     "footer.tagline": "امتحانات ذكية. تقييم أفضل.",
-    "auth.signin": "تسجيل الدخول", "auth.signup": "حساب جديد",
-    "auth.signin.title": "مرحبًا بعودتك", "auth.signin.subtitle": "سجّل الدخول للمتابعة.",
-    "auth.signup.title": "أنشئ حسابك", "auth.signup.subtitle": "ابدأ خلال ثوانٍ.",
-    "auth.google.signin": "الدخول بحساب Google", "auth.google.signup": "التسجيل بحساب Google",
+
+    // AUTH
+    "auth.signin": "تسجيل الدخول",
+    "auth.signup": "حساب جديد",
+    "auth.signin.title": "مرحبًا بعودتك",
+    "auth.signin.subtitle": "سجّل الدخول للمتابعة.",
+    "auth.signup.title": "أنشئ حسابك",
+    "auth.signup.subtitle": "ابدأ خلال ثوانٍ.",
+    "auth.google.signin": "الدخول بحساب Google",
+    "auth.google.signup": "التسجيل بحساب Google",
     "login.connecting": "جارٍ الاتصال…",
-    "login.terms": "بالمتابعة أنت توافق على", "login.termsLink": "الشروط",
-    "login.and": "و", "login.privacyLink": "سياسة الخصوصية",
-    "setup.title": "أكمل ملفك الشخصي", "setup.subtitle": "هذه المعلومات تظهر في امتحاناتك وتساعد الطلاب على التعرف عليك.",
-    "setup.photo.title": "الصورة الشخصية", "setup.photo.change": "تغيير الصورة",
-    "setup.photo.reset": "استخدام صورة Google", "setup.photo.hint": "JPG أو PNG أو WebP. الحد الأقصى 2 ميجابايت.",
+    "login.terms": "بالمتابعة أنت توافق على",
+    "login.termsLink": "الشروط",
+    "login.and": "و",
+    "login.privacyLink": "سياسة الخصوصية",
+
+    // SETUP
+    "setup.title": "أكمل ملفك الشخصي",
+    "setup.subtitle": "هذه المعلومات تظهر في امتحاناتك وتساعد الطلاب على التعرف عليك.",
+    "setup.photo.title": "الصورة الشخصية",
+    "setup.photo.change": "تغيير الصورة",
+    "setup.photo.reset": "استخدام صورة Google",
+    "setup.photo.hint": "JPG أو PNG أو WebP. الحد الأقصى 2 ميجابايت.",
     "setup.identity.title": "الهوية",
-    "setup.username.label": "اسم المستخدم", "setup.username.hint": "3–24 حرفًا. حروف وأرقام وشرطة سفلية فقط.",
-    "setup.fullName.label": "الاسم الكامل", "setup.fullName.hint": "يظهر للطلاب في صفحات الامتحان.",
-    "setup.subjects.title": "موادك", "setup.subjects.hint": "اختر كل المواد التي تدرّسها. ستكون متاحة عند إنشاء الامتحانات.",
-    "setup.subjects.customLabel": "إضافة مادة مخصصة", "setup.subjects.addCustom": "أضف",
-    "setup.signout": "تسجيل الخروج", "setup.cancel": "إلغاء", "setup.submit": "إكمال الإعداد",
+    "setup.username.label": "اسم المستخدم",
+    "setup.username.hint": "3–24 حرفًا. حروف وأرقام وشرطة سفلية فقط.",
+    "setup.fullName.label": "الاسم الكامل",
+    "setup.fullName.hint": "يظهر للطلاب في صفحات الامتحان.",
+    "setup.subjects.title": "موادك",
+    "setup.subjects.hint": "اختر كل المواد التي تدرّسها. ستكون متاحة عند إنشاء الامتحانات.",
+    "setup.subjects.customLabel": "إضافة مادة مخصصة",
+    "setup.subjects.addCustom": "أضف",
+    "setup.signout": "تسجيل الخروج",
+    "setup.cancel": "إلغاء",
+    "setup.submit": "إكمال الإعداد",
+
+    // DASHBOARD
     "dash.welcome.sub": "هذا ما يحدث في امتحاناتك.",
-    "dash.recentExams": "أحدث الامتحانات", "dash.activity": "النشاط الأخير",
-    "stat.totalExams": "إجمالي الامتحانات", "stat.activeExams": "الامتحانات النشطة",
-    "stat.submitted": "طلاب سلّموا", "stat.waiting": "بانتظار التصحيح",
-    "action.viewAll": "عرض الكل", "action.createExam": "إنشاء امتحان", "action.newExam": "امتحان جديد",
-    "action.prev": "السابق", "action.next": "التالي", "action.cancel": "إلغاء",
-    "action.preview": "معاينة", "action.publish": "نشر", "action.publishExam": "نشر الامتحان",
-    "action.addQuestion": "إضافة سؤال", "action.addForm": "إضافة نموذج",
-    "action.submit": "تسليم", "action.submitExam": "تسليم الامتحان",
-    "action.back": "السابق", "action.save": "حفظ",
-    "action.goHome": "الرئيسية", "action.editProfile": "تعديل", "action.deleteAccount": "حذف الحساب",
-    "action.open": "فتح", "action.edit": "تعديل", "action.share": "مشاركة", "action.grade": "تصحيح",
-    "status.draft": "مسودة", "status.scheduled": "مجدول", "status.active": "نشط",
-    "status.completed": "مكتمل", "status.submitted": "تم التسليم", "status.graded": "تم التصحيح",
+    "dash.recentExams": "أحدث الامتحانات",
+    "stat.totalExams": "إجمالي الامتحانات",
+    "stat.activeExams": "الامتحانات النشطة",
+    "stat.submitted": "طلاب سلّموا",
+    "stat.waiting": "بانتظار التصحيح",
+
+    // ACTIONS
+    "action.viewAll": "عرض الكل",
+    "action.createExam": "إنشاء امتحان",
+    "action.newExam": "امتحان جديد",
+    "action.cancel": "إلغاء",
+    "action.preview": "معاينة",
+    "action.publish": "نشر",
+    "action.publishExam": "نشر الامتحان",
+    "action.addQuestion": "إضافة سؤال",
+    "action.addForm": "إضافة نموذج",
+    "action.submit": "تسليم",
+    "action.submitExam": "تسليم الامتحان",
+    "action.back": "السابق",
+    "action.next": "التالي",
+    "action.save": "حفظ",
+    "action.ok": "حسنًا",
+    "action.goHome": "الرئيسية",
+    "action.open": "فتح",
+    "action.edit": "تعديل",
+    "action.share": "مشاركة",
+    "action.grade": "تصحيح",
+    "action.deleteAccount": "حذف الحساب",
+    "action.copyCode": "نسخ الكود",
+    "action.close": "إغلاق",
+    "action.downloadQR": "تحميل QR",
+    "action.copyLink": "نسخ الرابط",
+
+    // STATUS
+    "status.draft": "مسودة",
+    "status.scheduled": "مجدول",
+    "status.active": "نشط",
+    "status.completed": "مكتمل",
+    "status.submitted": "تم التسليم",
+    "status.graded": "تم التصحيح",
     "status.in_progress": "قيد الحل",
+
+    // FILTERS
     "filter.allStatus": "كل الحالات",
-    "empty.exams.title": "لا توجد امتحانات بعد", "empty.exams.text": "أنشئ أول امتحان للبدء.",
-    "empty.bank.title": "لا توجد أسئلة محفوظة", "empty.bank.text": "احفظ أسئلة من امتحاناتك لإعادة استخدامها لاحقًا.",
-    "packages.title": "الباقات", "packages.text": "تحت التطوير. الخطط والأسعار ستكون متاحة قريبًا.",
+    "exams.searchPlaceholder": "ابحث في الامتحانات…",
+
+    // EMPTY
+    "empty.exams.title": "لا توجد امتحانات بعد",
+    "empty.exams.text": "أنشئ أول امتحان للبدء.",
+    "empty.bank.title": "بنك الأسئلة",
+    "empty.bank.text": "احفظ أسئلة من امتحاناتك لإعادة استخدامها لاحقًا.",
+    "packages.title": "الباقات",
+    "packages.text": "تحت التطوير. الخطط والأسعار ستكون متاحة قريبًا.",
+
+    // BUILDER
     "builder.newExam": "امتحان جديد",
-    "builder.step.info": "البيانات", "builder.step.questions": "الأسئلة",
-    "builder.step.forms": "النماذج", "builder.step.settings": "الإعدادات",
     "builder.step": "خطوة",
-    "builder.info.title": "بيانات الامتحان", "builder.info.name": "اسم الامتحان",
-    "builder.info.subject": "المادة", "builder.info.selectSubject": "اختر المادة",
-    "builder.info.grade": "الصف", "builder.info.selectGrade": "اختر الصف",
-    "builder.questions.title": "الأسئلة", "builder.questions.total": "الدرجة الكلية:",
+    "builder.step.info": "البيانات",
+    "builder.step.questions": "الأسئلة",
+    "builder.step.forms": "النماذج",
+    "builder.step.settings": "الإعدادات",
+    "builder.info.title": "بيانات الامتحان",
+    "builder.info.name": "اسم الامتحان",
+    "builder.info.namePlaceholder": "مثال: امتحان الجبر - الفصل الأول",
+    "builder.info.subject": "المادة",
+    "builder.info.selectSubject": "اختر المادة",
+    "builder.info.grade": "الصف",
+    "builder.info.selectGrade": "اختر الصف",
+    "builder.questions.title": "الأسئلة",
+    "builder.questions.total": "الدرجة الكلية:",
     "builder.forms.title": "نماذج الامتحان",
     "builder.forms.hint": "كل نموذج له أسئلته المنفصلة. الطالب يحصل على نموذج عشوائي.",
     "builder.settings.title": "إعدادات الامتحان",
     "builder.settings.displayMode": "طريقة العرض",
-    "builder.settings.mode.scroll": "كل الأسئلة", "builder.settings.mode.scrollDesc": "ورقة امتحان كاملة",
-    "builder.settings.mode.single": "سؤال سؤال", "builder.settings.mode.singleDesc": "سؤال واحد في الشاشة",
-    "builder.settings.startAt": "يفتح في", "builder.settings.endAt": "يغلق في",
+    "builder.settings.mode.scroll": "كل الأسئلة",
+    "builder.settings.mode.scrollDesc": "ورقة امتحان كاملة",
+    "builder.settings.mode.single": "سؤال سؤال",
+    "builder.settings.mode.singleDesc": "سؤال واحد في الشاشة",
+    "builder.settings.startAt": "يفتح في",
+    "builder.settings.endAt": "يغلق في",
     "builder.settings.startHint": "لا يمكن للطلاب البدء قبل هذا الوقت.",
     "builder.settings.endHint": "لا يمكن للطلاب البدء بعد هذا الوقت.",
     "builder.settings.duration": "المدة (دقائق)",
     "builder.settings.accessCodeValue": "كود الدخول (اختياري)",
+    "builder.settings.accessCodePlaceholder": "مثال: ABC123",
     "builder.settings.shuffle": "خلط ترتيب الأسئلة لكل طالب",
     "builder.settings.accessCode": "طلب كود دخول",
     "builder.settings.fullscreen": "طلب ملء الشاشة خلال الامتحان",
+
+    // QUESTIONS
     "question.text": "نص السؤال…",
-    "question.correct": "الإجابة الصحيحة", "question.model": "الإجابة النموذجية",
-    "question.score": "الدرجة", "question.option": "خيار", "question.addOption": "إضافة خيار",
-    "question.true": "صح", "question.false": "خطأ",
-    "common.questions": "أسئلة", "common.points": "نقطة", "common.saved": "تم الحفظ", "common.saving": "جارٍ الحفظ…",
-    "common.saveFailed": "فشل الحفظ", "common.teacher": "المعلم", "common.duration": "المدة",
-    "common.subject": "المادة", "common.grade": "الصف", "common.totalPossible": "الدرجة الكلية",
-    "common.saveGrading": "حفظ التصحيح", "common.publishResult": "نشر النتيجة",
-    "common.student": "الطالب", "common.status": "الحالة", "common.score": "الدرجة",
-    "common.started": "البدء", "common.submitted": "التسليم", "common.notFound": "غير موجود",
-    "exam.loading": "جارٍ تحميل الامتحان…", "exam.connected": "متصل",
-    "exam.entry.studentName": "اسمك الكامل", "exam.entry.accessCode": "كود الدخول",
-    "exam.entry.start": "ابدأ الامتحان", "exam.entry.foot": "تأكد من صحة اسمك — سيُستخدم للتصحيح.",
-    "entry.badge": "امتحان", "entry.teacher": "المعلم", "entry.subtitle": "راجع التفاصيل وأدخل اسمك للبدء.",
-    "exam.resume.title": "استئناف الامتحان؟", "exam.resume.text": "لديك امتحان جارٍ. تم حفظ إجاباتك والوقت المتبقي.",
-    "exam.resume.continue": "استئناف",
-    "exam.confirm.title": "تسليم الامتحان؟", "exam.confirm.text": "هل أنت متأكد؟ لا يمكنك التعديل بعد التسليم.",
-    "exam.confirm.unanswered": "أسئلة بدون إجابة",
-    "exam.confirm.submitAnyway": "سلّم على أي حال", "exam.confirm.goToFirst": "روح للسؤال",
-    "exam.update.title": "تم تحديث الامتحان", "exam.update.text": "قام المعلم بتحديث الامتحان. حدّث الصفحة لتحميل النسخة الأحدث. إجاباتك ستبقى.",
-    "exam.update.refresh": "تحديث الامتحان",
+    "question.correct": "الإجابة الصحيحة",
+    "question.model": "الإجابة النموذجية",
+    "question.score": "الدرجة",
+    "question.option": "خيار",
+    "question.addOption": "إضافة خيار",
+    "question.true": "صح",
+    "question.false": "خطأ",
+    "question.justificationModelAnswer": "الإجابة النموذجية للتبرير",
+    "question.justificationPlaceholder": "اكتب التبرير المثالي المتوقع من الطالب…",
+    "question.image": "صورة",
+    "question.removeImage": "حذف الصورة",
+    "question.duplicate": "نسخ",
+    "question.delete": "حذف",
+
+    // COMMON
+    "common.questions": "سؤال",
+    "common.points": "نقطة",
+    "common.saved": "تم الحفظ",
+    "common.saving": "جارٍ الحفظ…",
+    "common.saveFailed": "فشل الحفظ",
+    "common.teacher": "المعلم",
+    "common.duration": "المدة",
+    "common.subject": "المادة",
+    "common.grade": "الصف",
+    "common.totalPossible": "الدرجة الكلية",
+    "common.saveGrading": "حفظ التصحيح",
+    "common.publishResult": "نشر النتيجة",
+    "common.student": "الطالب",
+    "common.status": "الحالة",
+    "common.score": "الدرجة",
+    "common.started": "البدء",
+    "common.submitted": "التسليم",
+    "common.notFound": "غير موجود",
+    "common.copied": "تم النسخ",
+    "common.minutes": "دقيقة",
+
+    // EXAM
+    "exam.loading": "جارٍ تحميل الامتحان…",
+    "exam.connected": "متصل",
     "exam.offline": "فقد الاتصال. إجاباتك محفوظة محليًا وستتم المزامنة عند عودة الاتصال.",
+    "exam.entry.studentName": "اسمك الكامل",
+    "exam.entry.studentNamePlaceholder": "مثال: أحمد محمد",
+    "exam.entry.accessCode": "كود الدخول",
+    "exam.entry.accessCodePlaceholder": "أدخل الكود",
+    "exam.entry.start": "ابدأ الامتحان",
+    "exam.entry.foot": "تأكد من صحة اسمك — سيُستخدم للتصحيح.",
+    "entry.badge": "امتحان",
+    "entry.teacher": "المعلم",
+    "entry.subtitle": "راجع التفاصيل وأدخل اسمك للبدء.",
+    "exam.resume.title": "استئناف الامتحان؟",
+    "exam.resume.text": "لديك امتحان جارٍ. تم حفظ إجاباتك والوقت المتبقي.",
+    "exam.resume.continue": "استئناف",
+    "exam.confirm.title": "تسليم الامتحان؟",
+    "exam.confirm.text": "هل أنت متأكد؟ لا يمكنك التعديل بعد التسليم.",
+    "exam.confirm.unanswered": "أسئلة بدون إجابة",
+    "exam.confirm.submitAnyway": "سلّم على أي حال",
+    "exam.confirm.goToFirst": "روح للسؤال",
+    "exam.update.title": "تم تحديث الامتحان",
+    "exam.update.text": "قام المعلم بتحديث الامتحان. حدّث الصفحة لتحميل النسخة الأحدث. إجاباتك ستبقى.",
+    "exam.update.refresh": "تحديث الامتحان",
     "exam.timeUp": "انتهى الوقت. تم تسليم الامتحان تلقائيًا.",
-    "exam.newQuestion": "سؤال جديد أضافه المعلم.",
-    "result.loading": "جارٍ تحميل النتيجة…", "result.waiting": "بانتظار التصحيح.",
-    "result.feedback": "ملاحظات المعلم", "result.review": "مراجعة الإجابات",
+    "exam.submitted.title": "تم تسليم الامتحان",
+    "exam.submitted.text": "احفظ الكود ده للرجوع لنتيجتك في أي وقت.",
+    "exam.submitted.viewResult": "عرض النتيجة",
+    "exam.leftPage": "تم تسليم الامتحان لتركك الصفحة",
+    "exam.answeredLabel": "تمت الإجابة",
+    "exam.unansweredLabel": "بدون إجابة",
+
+    // SECURITY
+    "security.tabTitle": "تم كشف تبديل التاب",
+    "security.tabHidden": "لقد تركت صفحة الامتحان. سيتم تسليم امتحانك إذا لم تعد خلال 5 ثوانٍ.",
+    "security.fsTitle": "ملء الشاشة مطلوب",
+    "security.fsExit": "لقد خرجت من ملء الشاشة. يرجى العودة للمتابعة.",
+
+    // RESULT
+    "result.loading": "جارٍ تحميل النتيجة…",
+    "result.waiting": "بانتظار التصحيح.",
+    "result.feedback": "ملاحظات المعلم",
+    "result.review": "مراجعة الإجابات",
     "result.reviewSub": "شاهد إجاباتك بجانب الإجابات الصحيحة.",
-    "settings.appearance": "المظهر", "settings.light": "الوضع الفاتح", "settings.dark": "الوضع الداكن",
-    "settings.language": "اللغة",
-    "profile.subjects": "المواد", "profile.danger": "منطقة الخطر",
+    "result.yourAnswer": "إجابتك",
+    "result.correctAnswer": "الإجابة الصحيحة",
+    "result.modelAnswer": "الإجابة النموذجية",
+    "result.yourJustification": "تبريرك",
+    "result.modelJustification": "التبرير النموذجي",
+    "result.lookup.title": "تحقق من نتيجتك",
+    "result.lookup.sub": "أدخل الكود الذي حصلت عليه بعد التسليم",
+    "result.lookup.check": "تحقق",
+    "result.lookup.codePlaceholder": "XXXX-XXXX",
+    "result.lookup.invalidCode": "الكود غير صحيح",
+    "result.lookup.codeLength": "الكود لازم يكون 8 أحرف",
+    "result.lookup.error": "خطأ في البحث",
+    "result.anotherCode": "كود آخر",
+    "result.grading": "جارٍ تصحيح ورقتك… الصفحة ستعاود التحديث تلقائيًا",
+
+    // GRADING
+    "grading.studentAnswer": "إجابة الطالب",
+    "grading.justification": "التبرير",
+    "grading.feedback": "ملاحظة",
+    "grading.examFeedback": "ملاحظات عامة",
+    "grading.auto": "تلقائي:",
+    "grading.nothingPending": "لا يوجد ما ينتظر التصحيح.",
+    "grading.noStudents": "لا يوجد طلاب بعد",
+    "grading.shareToStart": "شارك رابط الامتحان للبدء.",
+
+    // PROFILE
+    "profile.subjects": "المواد",
+    "profile.danger": "منطقة الخطر",
     "profile.dangerText": "حذف الحساب يمسح كل امتحاناتك وطلابك ونتائجك نهائيًا.",
-    "security.tabTitle": "تم كشف تبديل التاب", "security.tabHidden": "لقد تركت صفحة الامتحان. تم تسجيل هذا الحدث.",
-    "security.fsTitle": "ملء الشاشة مطلوب", "security.fsExit": "لقد خرجت من ملء الشاشة. يرجى العودة للمتابعة."
+
+    // SETTINGS
+    "settings.appearance": "المظهر",
+    "settings.light": "الوضع الفاتح",
+    "settings.dark": "الوضع الداكن",
+
+    // SHARE
+    "share.title": "شارك الامتحان",
+    "share.linkLabel": "رابط الامتحان",
+    "share.scanQR": "امسح الكود",
+    "share.copy": "نسخ",
+    "share.downloadQR": "تحميل QR",
+    "share.copied": "تم النسخ",
+    "share.downloaded": "تم التحميل",
+    "share.qrFailed": "تعذّر إنشاء الصورة",
+
+    // QR MODAL
+    "qr.title": "شارك الامتحان",
+    "qr.subtitle": "شارك الرابط أو امسح كود QR",
+    "qr.download": "تحميل QR",
+    "qr.close": "إغلاق"
   }
 };
 
-const LANG_KEY = "qeyasquiz.lang";
-const THEME_KEY = "qeyasquiz.theme";
-let currentLang = localStorage.getItem(LANG_KEY) || "en";
-let currentTheme = localStorage.getItem(THEME_KEY) || "light";
+let currentLang = "ar";
 
 function t(key) {
-  return (I18N[currentLang] && I18N[currentLang][key]) || I18N.en[key] || key;
+  return (I18N[currentLang] && I18N[currentLang][key]) || I18N.ar[key] || key;
 }
 
 function applyI18n(root = document) {
   root.querySelectorAll("[data-i18n]").forEach((el) => {
-    el.textContent = t(el.dataset.i18n);
+    const key = el.dataset.i18n;
+    const val = t(key);
+    if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
+      if (el.dataset.i18nUsedAsPlaceholder !== undefined || el.placeholder) {
+        el.placeholder = val;
+      }
+    } else {
+      el.textContent = val;
+    }
   });
   root.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
     el.placeholder = t(el.dataset.i18nPlaceholder);
   });
-}
-
-function setLang(lang) {
-  currentLang = lang;
-  localStorage.setItem(LANG_KEY, lang);
-  document.documentElement.lang = lang;
-  document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
-  applyI18n();
-  document.querySelectorAll(".lang-btn").forEach((b) => {
-    b.classList.toggle("is-active", b.dataset.lang === lang);
-  });
-  // Re-render active view if needed
-  if (currentRoute && routeHandlers[currentRoute]) {
-    try { routeHandlers[currentRoute](currentParams || new URLSearchParams()); } catch {}
-  }
-}
-
-function setTheme(theme) {
-  currentTheme = theme;
-  localStorage.setItem(THEME_KEY, theme);
-  document.documentElement.dataset.theme = theme;
-}
-
-function toggleTheme() {
-  setTheme(currentTheme === "dark" ? "light" : "dark");
 }
 
 /* ============================================================
@@ -432,26 +518,26 @@ function uid(len = 12) {
   return s;
 }
 
+function generateResultCode() {
+  const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  const arr = new Uint32Array(8);
+  crypto.getRandomValues(arr);
+  let code = "";
+  for (let i = 0; i < 8; i++) {
+    code += chars[arr[i] % chars.length];
+    if (i === 3) code += "-";
+  }
+  return code;
+}
+
 function fmtDate(ts) {
   if (!ts) return "—";
   const d = ts.toDate ? ts.toDate() : new Date(ts);
-  return d.toLocaleString(currentLang === "ar" ? "ar-EG" : "en-GB", {
-    year: "numeric", month: "short", day: "numeric",
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleString("ar-EG", {
+    year: "numeric", month: "long", day: "numeric",
     hour: "2-digit", minute: "2-digit"
   });
-}
-
-function fmtRelative(ts) {
-  if (!ts) return "";
-  const d = ts.toDate ? ts.toDate() : new Date(ts);
-  const diff = Date.now() - d.getTime();
-  const min = Math.floor(diff / 60000);
-  if (min < 1) return currentLang === "ar" ? "الآن" : "just now";
-  if (min < 60) return currentLang === "ar" ? `قبل ${min} دقيقة` : `${min}m ago`;
-  const h = Math.floor(min / 60);
-  if (h < 24) return currentLang === "ar" ? `قبل ${h} ساعة` : `${h}h ago`;
-  const days = Math.floor(h / 24);
-  return currentLang === "ar" ? `قبل ${days} يوم` : `${days}d ago`;
 }
 
 function normalizeUsername(u) { return String(u || "").trim().toLowerCase(); }
@@ -473,6 +559,306 @@ function fromLocalInput(v) {
 }
 
 /* ============================================================
+   THREE.JS — PROFESSIONAL BACKGROUND
+   ============================================================ */
+function initThreeBackground() {
+  if (typeof THREE === "undefined") return;
+  const canvas = document.getElementById("bgCanvas");
+  if (!canvas) return;
+
+  // Respect reduced motion
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(
+    60,
+    window.innerWidth / window.innerHeight,
+    0.1,
+    1000
+  );
+  camera.position.z = 8;
+
+  const renderer = new THREE.WebGLRenderer({
+    canvas,
+    alpha: true,
+    antialias: true,
+    powerPreference: "low-power"
+  });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+
+  const isDark = document.documentElement.dataset.theme === "dark";
+  const brandColor = 0x3f68f5;
+  const accentColor = 0x93b1ff;
+
+  // ===== Particle Grid =====
+  const particleCount = window.innerWidth < 768 ? 180 : 400;
+  const positions = new Float32Array(particleCount * 3);
+  const velocities = new Float32Array(particleCount * 3);
+  const sizes = new Float32Array(particleCount);
+
+  for (let i = 0; i < particleCount; i++) {
+    positions[i * 3]     = (Math.random() - 0.5) * 30;
+    positions[i * 3 + 1] = (Math.random() - 0.5) * 20;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 15;
+
+    velocities[i * 3]     = (Math.random() - 0.5) * 0.008;
+    velocities[i * 3 + 1] = (Math.random() - 0.5) * 0.008;
+    velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.008;
+
+    sizes[i] = 0.04 + Math.random() * 0.08;
+  }
+
+  const particleGeom = new THREE.BufferGeometry();
+  particleGeom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  particleGeom.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
+
+  const particleMat = new THREE.PointsMaterial({
+    color: isDark ? accentColor : brandColor,
+    size: 0.08,
+    transparent: true,
+    opacity: isDark ? 0.55 : 0.4,
+    sizeAttenuation: true,
+    depthWrite: false,
+    blending: isDark ? THREE.AdditiveBlending : THREE.NormalBlending
+  });
+
+  const particles = new THREE.Points(particleGeom, particleMat);
+  scene.add(particles);
+
+  // ===== Connection Lines =====
+  const maxConnections = 60;
+  const lineGeom = new THREE.BufferGeometry();
+  const linePositions = new Float32Array(maxConnections * 6);
+  lineGeom.setAttribute("position", new THREE.BufferAttribute(linePositions, 3));
+
+  const lineMat = new THREE.LineBasicMaterial({
+    color: isDark ? accentColor : brandColor,
+    transparent: true,
+    opacity: isDark ? 0.12 : 0.08,
+    depthWrite: false
+  });
+
+  const lines = new THREE.LineSegments(lineGeom, lineMat);
+  scene.add(lines);
+
+  // ===== Floating Torus Knot =====
+  const knotGeom = new THREE.TorusKnotGeometry(1.6, 0.4, 80, 12, 2, 3);
+  const knotMat = new THREE.MeshBasicMaterial({
+    color: isDark ? accentColor : brandColor,
+    wireframe: true,
+    transparent: true,
+    opacity: isDark ? 0.14 : 0.08
+  });
+  const knot = new THREE.Mesh(knotGeom, knotMat);
+  knot.position.set(0, 0, -2);
+  scene.add(knot);
+
+  // ===== Floating Icosahedron =====
+  const icoGeom = new THREE.IcosahedronGeometry(0.7, 1);
+  const icoMat = new THREE.MeshBasicMaterial({
+    color: isDark ? 0x6a8dff : 0x2a4cd6,
+    wireframe: true,
+    transparent: true,
+    opacity: isDark ? 0.2 : 0.12
+  });
+  const ico = new THREE.Mesh(icoGeom, icoMat);
+  ico.position.set(-5, 3, -3);
+  scene.add(ico);
+
+  const ico2 = new THREE.Mesh(icoGeom, icoMat.clone());
+  ico2.position.set(5, -3, -4);
+  ico2.scale.setScalar(1.4);
+  scene.add(ico2);
+
+  // ===== Mouse Interaction =====
+  let mouseX = 0, mouseY = 0;
+  window.addEventListener("mousemove", (e) => {
+    mouseX = (e.clientX / window.innerWidth) * 2 - 1;
+    mouseY = -(e.clientY / window.innerHeight) * 2 + 1;
+  });
+
+  // ===== Animation Loop =====
+  let rafId = null;
+  let paused = false;
+  const clock = new THREE.Clock();
+
+  function animate() {
+    if (paused) return;
+    rafId = requestAnimationFrame(animate);
+
+    const time = clock.getElapsedTime();
+
+    // Update particles
+    const posAttr = particleGeom.attributes.position;
+    for (let i = 0; i < particleCount; i++) {
+      positions[i * 3]     += velocities[i * 3];
+      positions[i * 3 + 1] += velocities[i * 3 + 1];
+      positions[i * 3 + 2] += velocities[i * 3 + 2];
+
+      // Bounds
+      if (positions[i * 3] > 15 || positions[i * 3] < -15) velocities[i * 3] *= -1;
+      if (positions[i * 3 + 1] > 10 || positions[i * 3 + 1] < -10) velocities[i * 3 + 1] *= -1;
+      if (positions[i * 3 + 2] > 8 || positions[i * 3 + 2] < -8) velocities[i * 3 + 2] *= -1;
+    }
+    posAttr.needsUpdate = true;
+
+    // Update connection lines
+    let lineIdx = 0;
+    for (let i = 0; i < particleCount && lineIdx < maxConnections; i++) {
+      for (let j = i + 1; j < particleCount && lineIdx < maxConnections; j++) {
+        const dx = positions[i * 3] - positions[j * 3];
+        const dy = positions[i * 3 + 1] - positions[j * 3 + 1];
+        const dz = positions[i * 3 + 2] - positions[j * 3 + 2];
+        const distSq = dx * dx + dy * dy + dz * dz;
+
+        if (distSq < 4) {
+          linePositions[lineIdx * 6]     = positions[i * 3];
+          linePositions[lineIdx * 6 + 1] = positions[i * 3 + 1];
+          linePositions[lineIdx * 6 + 2] = positions[i * 3 + 2];
+          linePositions[lineIdx * 6 + 3] = positions[j * 3];
+          linePositions[lineIdx * 6 + 4] = positions[j * 3 + 1];
+          linePositions[lineIdx * 6 + 5] = positions[j * 3 + 2];
+          lineIdx++;
+        }
+      }
+    }
+    for (let k = lineIdx; k < maxConnections; k++) {
+      linePositions[k * 6]     = 0;
+      linePositions[k * 6 + 1] = 0;
+      linePositions[k * 6 + 2] = 0;
+      linePositions[k * 6 + 3] = 0;
+      linePositions[k * 6 + 4] = 0;
+      linePositions[k * 6 + 5] = 0;
+    }
+    lineGeom.attributes.position.needsUpdate = true;
+
+    // Rotate decorative meshes
+    knot.rotation.x = time * 0.15;
+    knot.rotation.y = time * 0.2;
+
+    ico.rotation.x = time * 0.25;
+    ico.rotation.y = time * 0.3;
+
+    ico2.rotation.x = -time * 0.2;
+    ico2.rotation.y = -time * 0.25;
+
+    // Gentle scene drift following mouse
+    particles.rotation.y += (mouseX * 0.15 - particles.rotation.y) * 0.02;
+    particles.rotation.x += (mouseY * 0.1 - particles.rotation.x) * 0.02;
+    knot.rotation.z = mouseX * 0.3;
+    ico.position.x = -5 + mouseX * 0.5;
+    ico.position.y = 3 + mouseY * 0.4;
+    ico2.position.x = 5 - mouseX * 0.4;
+    ico2.position.y = -3 - mouseY * 0.3;
+
+    renderer.render(scene, camera);
+  }
+
+  // ===== Handle Visibility =====
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      paused = true;
+      if (rafId) cancelAnimationFrame(rafId);
+    } else {
+      paused = false;
+      clock.getDelta();
+      animate();
+    }
+  });
+
+  // ===== Resize =====
+  window.addEventListener("resize", () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // ===== Theme Change =====
+  const themeObserver = new MutationObserver(() => {
+    const dark = document.documentElement.dataset.theme === "dark";
+    particleMat.color.setHex(dark ? accentColor : brandColor);
+    particleMat.opacity = dark ? 0.55 : 0.4;
+    lineMat.color.setHex(dark ? accentColor : brandColor);
+    lineMat.opacity = dark ? 0.12 : 0.08;
+    knotMat.color.setHex(dark ? accentColor : brandColor);
+    knotMat.opacity = dark ? 0.14 : 0.08;
+    icoMat.color.setHex(dark ? 0x6a8dff : 0x2a4cd6);
+    icoMat.opacity = dark ? 0.2 : 0.12;
+    ico2.material.color.setHex(dark ? 0x6a8dff : 0x2a4cd6);
+    ico2.material.opacity = dark ? 0.2 : 0.12;
+  });
+  themeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-theme"]
+  });
+
+  animate();
+}
+
+/* ============================================================
+   ANTI-COPY PROTECTION
+   ============================================================ */
+function initAntiCopy() {
+  // Prevent copy
+  document.addEventListener("copy", (e) => {
+    const target = e.target;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+      return;
+    }
+    e.preventDefault();
+    if (e.clipboardData) e.clipboardData.setData("text/plain", "");
+  }, true);
+
+  // Prevent cut
+  document.addEventListener("cut", (e) => {
+    const target = e.target;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+    e.preventDefault();
+  }, true);
+
+  // Prevent right-click (except on inputs)
+  document.addEventListener("contextmenu", (e) => {
+    const target = e.target;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+    e.preventDefault();
+  });
+
+  // Prevent image drag
+  document.addEventListener("dragstart", (e) => {
+    if (e.target.tagName === "IMG" || e.target.tagName === "SVG") {
+      e.preventDefault();
+      return false;
+    }
+  });
+
+  // Prevent keyboard shortcuts
+  document.addEventListener("keydown", (e) => {
+    const ctrl = e.ctrlKey || e.metaKey;
+    const key = (e.key || "").toLowerCase();
+
+    if (ctrl && ["c", "x", "a", "s", "p", "u"].includes(key)) {
+      const target = e.target;
+      const isInput = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+      if (["c", "x", "a"].includes(key) && isInput) return;
+      if (["p"].includes(key) && e.shiftKey) return;
+      e.preventDefault();
+      return false;
+    }
+
+    if (key === "f12") {
+      e.preventDefault();
+      return false;
+    }
+
+    if (ctrl && e.shiftKey && ["i", "j", "c", "k"].includes(key)) {
+      e.preventDefault();
+      return false;
+    }
+  }, true);
+}
+
+/* ============================================================
    TOAST
    ============================================================ */
 function toast(message, type = "info", timeout = 4000) {
@@ -484,7 +870,7 @@ function toast(message, type = "info", timeout = 4000) {
   icon.classList.add("toast-icon");
   node.appendChild(icon);
   node.appendChild(el("div", { class: "toast-body", text: message }));
-  const closeBtn = el("button", { class: "toast-close", type: "button", "aria-label": "Close" });
+  const closeBtn = el("button", { class: "toast-close", type: "button", "aria-label": "إغلاق" });
   closeBtn.appendChild(svgIcon("x", 14));
   node.appendChild(closeBtn);
   const close = () => {
@@ -551,9 +937,9 @@ async function signInWithGoogle() {
     return (await signInWithPopup(auth, googleProvider)).user;
   } catch (err) {
     if (err.code === "auth/popup-closed-by-user" || err.code === "auth/cancelled-popup-request") {
-      throw new Error(currentLang === "ar" ? "تم إلغاء تسجيل الدخول." : "Sign in was cancelled.");
+      throw new Error("تم إلغاء تسجيل الدخول.");
     }
-    throw new Error(currentLang === "ar" ? "تعذّر تسجيل الدخول. حاول مرة أخرى." : "Could not sign in. Please try again.");
+    throw new Error("تعذّر تسجيل الدخول. حاول مرة أخرى.");
   }
 }
 
@@ -609,7 +995,6 @@ async function listExams(uid, limitN = 100) {
     ));
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   } catch (err) {
-    console.warn("[listExams] fallback query", err);
     try {
       const snap = await getDocs(query(collection(db, "exams"), where("ownerId", "==", uid)));
       return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -738,7 +1123,6 @@ function handleRoute() {
     const titleEl = $("[data-page-title]");
     if (titleEl) titleEl.textContent = t(titleMap[route.view] || "");
 
-    // Show back button except on dashboard
     const backBtn = $("[data-back]");
     if (backBtn) backBtn.hidden = route.view === "dashboard";
   }
@@ -748,11 +1132,27 @@ function handleRoute() {
   if (handler) {
     Promise.resolve(handler(params)).catch((err) => {
       console.error("[route]", err);
-      toast(currentLang === "ar" ? "حدث خطأ في تحميل الصفحة." : "Failed to load page.", "error");
+      toast("حدث خطأ في تحميل الصفحة.", "error");
     });
   }
 
   window.scrollTo(0, 0);
+}
+
+/* ============================================================
+   THEME
+   ============================================================ */
+const THEME_KEY = "qeyasquiz.theme";
+let currentTheme = localStorage.getItem(THEME_KEY) || "light";
+
+function setTheme(theme) {
+  currentTheme = theme;
+  localStorage.setItem(THEME_KEY, theme);
+  document.documentElement.dataset.theme = theme;
+}
+
+function toggleTheme() {
+  setTheme(currentTheme === "dark" ? "light" : "dark");
 }
 
 /* ============================================================
@@ -874,7 +1274,6 @@ function initSetup() {
   const customChips = $("[data-custom-chips]");
   const subjectsError = $("[data-subjects-error]");
 
-  // Prefill
   if (currentUser) {
     if (currentUser.displayName) fullNameInput.value = currentUser.displayName;
     if (currentUser.photoURL) avatarPreview.src = currentUser.photoURL;
@@ -882,7 +1281,6 @@ function initSetup() {
     if (base.length >= 3) usernameInput.value = base;
   }
 
-  // Render subject grid
   function renderSubjectGrid() {
     subjectGrid.innerHTML = "";
     SUBJECTS.forEach((s) => {
@@ -890,7 +1288,7 @@ function initSetup() {
       const chip = el("button", {
         type: "button",
         class: `subject-chip ${selected ? "is-selected" : ""}`,
-        text: currentLang === "ar" ? s.ar : s.en,
+        text: s.ar,
         onclick: () => {
           const idx = setupState.selectedSubjects.indexOf(s.id);
           if (idx >= 0) setupState.selectedSubjects.splice(idx, 1);
@@ -903,14 +1301,13 @@ function initSetup() {
   }
   renderSubjectGrid();
 
-  // Custom subjects
   const customSubjects = [];
   function renderCustomChips() {
     customChips.innerHTML = "";
     customSubjects.forEach((name, i) => {
       const chip = el("span", { class: "chip" });
       chip.appendChild(document.createTextNode(name));
-      const rm = el("button", { type: "button", class: "chip-remove", "aria-label": "Remove" });
+      const rm = el("button", { type: "button", class: "chip-remove", "aria-label": "حذف" });
       rm.appendChild(svgIcon("x", 10));
       rm.addEventListener("click", () => {
         customSubjects.splice(i, 1);
@@ -929,7 +1326,6 @@ function initSetup() {
     renderCustomChips();
   });
 
-  // Username check
   const checkUname = debounce(async () => {
     const val = usernameInput.value.trim();
     usernameError.hidden = true;
@@ -947,10 +1343,10 @@ function initSetup() {
       const ok = await checkUsernameAvailability(val);
       usernameStatus.classList.remove("is-checking");
       if (ok) {
-        usernameStatus.textContent = currentLang === "ar" ? "متاح" : "Available";
+        usernameStatus.textContent = "متاح";
         usernameStatus.classList.add("is-available");
       } else {
-        usernameStatus.textContent = currentLang === "ar" ? "مأخوذ" : "Taken";
+        usernameStatus.textContent = "مأخوذ";
         usernameStatus.classList.add("is-taken");
       }
     } catch { usernameStatus.textContent = ""; }
@@ -958,12 +1354,11 @@ function initSetup() {
 
   usernameInput.addEventListener("input", checkUname);
 
-  // Avatar
   avatarPick.addEventListener("click", () => avatarInput.click());
   avatarInput.addEventListener("change", () => {
     const f = avatarInput.files?.[0];
     if (!f) return;
-    if (f.size > 2 * 1024 * 1024) { toast("Max 2 MB", "warning"); return; }
+    if (f.size > 2 * 1024 * 1024) { toast("الحد الأقصى 2 ميجابايت", "warning"); return; }
     setupState.photoFile = f;
     avatarPreview.src = URL.createObjectURL(f);
   });
@@ -973,7 +1368,6 @@ function initSetup() {
     avatarInput.value = "";
   });
 
-  // Submit
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     let ok = true;
@@ -987,13 +1381,13 @@ function initSetup() {
 
     const fullName = fullNameInput.value.trim();
     if (fullName.length < 3) {
-      toast(currentLang === "ar" ? "أدخل اسمك الكامل" : "Enter your full name", "warning");
+      toast("أدخل اسمك الكامل", "warning");
       ok = false;
     }
 
     if (setupState.selectedSubjects.length === 0 && customSubjects.length === 0) {
       subjectsError.hidden = false;
-      subjectsError.textContent = currentLang === "ar" ? "اختر مادة واحدة على الأقل" : "Select at least one subject";
+      subjectsError.textContent = "اختر مادة واحدة على الأقل";
       ok = false;
     } else subjectsError.hidden = true;
 
@@ -1007,8 +1401,8 @@ function initSetup() {
         try {
           photoURL = await uploadAvatar(currentUser.uid, setupState.photoFile);
         } catch (err) {
-          console.warn("avatar upload failed:", err);
-          toast(currentLang === "ar" ? "تعذّر رفع الصورة — سيتم استخدام صورة Google" : "Photo upload failed — using Google photo", "warning");
+          console.warn(err);
+          toast("تعذّر رفع الصورة — سيتم استخدام صورة Google", "warning");
         }
       }
 
@@ -1024,18 +1418,18 @@ function initSetup() {
       });
 
       currentProfile = await loadProfile(currentUser.uid);
-      toast(currentLang === "ar" ? "تم حفظ الملف" : "Profile saved", "success");
+      toast("تم حفظ الملف", "success");
       navigate("/app/dashboard");
     } catch (err) {
       submitBtn.classList.remove("is-loading");
       if (err.message === "USERNAME_TAKEN") {
         usernameError.hidden = false;
-        usernameError.textContent = currentLang === "ar" ? "اسم المستخدم مأخوذ" : "Username already taken.";
-        usernameStatus.textContent = currentLang === "ar" ? "مأخوذ" : "Taken";
+        usernameError.textContent = "اسم المستخدم مأخوذ";
+        usernameStatus.textContent = "مأخوذ";
         usernameStatus.className = "input-status is-taken";
       } else {
         console.error(err);
-        toast(currentLang === "ar" ? "تعذّر حفظ البيانات." : "Could not save profile.", "error");
+        toast("تعذّر حفظ البيانات.", "error");
       }
     }
   });
@@ -1050,12 +1444,8 @@ async function renderDashboard() {
   const welcomeTitle = $("[data-welcome-title]");
   if (welcomeTitle) {
     const hour = new Date().getHours();
-    const greeting = hour < 12
-      ? (currentLang === "ar" ? "صباح الخير" : "Good morning")
-      : hour < 18
-        ? (currentLang === "ar" ? "مساء الخير" : "Good afternoon")
-        : (currentLang === "ar" ? "مساء الخير" : "Good evening");
-    welcomeTitle.textContent = `${greeting}, ${(currentProfile.fullName || "").split(" ")[0] || ""}`;
+    const greeting = hour < 12 ? "صباح الخير" : "مساء الخير";
+    welcomeTitle.textContent = `${greeting}، ${(currentProfile.fullName || "").split(" ")[0] || ""}`;
   }
 
   const exams = await listExams(currentProfile.uid);
@@ -1099,15 +1489,15 @@ function buildExamCard(exam) {
   const card = el("article", { class: "card-brutal tint-1 exam-card" });
   card.appendChild(el("div", { class: "exam-card-head" }, [
     el("div", {}, [
-      el("div", { class: "exam-card-title", text: exam.title || "Untitled" }),
-      el("div", { class: "exam-card-sub", text: `${subjectLabel(exam.subject)} · ${exam.grade || "—"}` })
+      el("div", { class: "exam-card-title", text: exam.title || "بدون اسم" }),
+      el("div", { class: "exam-card-sub", text: `${subjectLabel(exam.subject)} · ${gradeLabel(exam.grade)}` })
     ]),
     el("span", { class: `badge badge-${status}`, text: t("status." + status) })
   ]));
   const meta = el("div", { class: "exam-card-meta" });
-  const qCount = (exam.questions?.length || 0);
-  meta.appendChild(el("span", {}, [svgIcon("file-text", 14), document.createTextNode(`${qCount} Q`)]));
-  meta.appendChild(el("span", {}, [svgIcon("timer", 14), document.createTextNode(`${exam.duration || 0} min`)]));
+  const qCount = (exam.totalQuestions || 0);
+  meta.appendChild(el("span", {}, [svgIcon("file-text", 14), document.createTextNode(`${qCount} سؤال`)]));
+  meta.appendChild(el("span", {}, [svgIcon("timer", 14), document.createTextNode(`${exam.duration || 0} دقيقة`)]));
   card.appendChild(meta);
   card.appendChild(el("div", { class: "exam-card-foot" }, [
     el("button", { class: "btn btn-primary btn-sm", type: "button", text: t("action.open") })
@@ -1204,7 +1594,7 @@ let builderState = {
     requireAccessCode: false,
     accessCode: "",
     requireFullscreen: false,
-    forms: [{ id: "A", name: "Form A", questions: [] }]
+    forms: [{ id: "A", name: "النموذج أ", questions: [] }]
   }
 };
 
@@ -1214,12 +1604,12 @@ async function renderBuilder(params) {
     const exam = await getExam(examId);
     if (exam && exam.ownerId === currentProfile.uid) {
       builderState.examId = examId;
-
-      // Load answers separately (only teacher has read access)
       const answersMap = await getExamAnswers(examId);
 
-      // Merge questions with answers for editing
-      const mergedForms = (exam.forms && exam.forms.length ? exam.forms : [{ id: "A", name: "Form A", questions: exam.questions || [] }]).map((form) => ({
+      const mergedForms = (exam.forms && exam.forms.length
+        ? exam.forms
+        : [{ id: "A", name: "النموذج أ", questions: exam.questions || [] }]
+      ).map((form) => ({
         ...form,
         questions: (form.questions || []).map((q) => {
           const ans = answersMap[q.id] || {};
@@ -1228,7 +1618,8 @@ async function renderBuilder(params) {
             correctIndex: ans.correctIndex ?? 0,
             correctBool: ans.correctBool ?? null,
             correctText: ans.correctText || "",
-            modelAnswer: ans.modelAnswer || ""
+            modelAnswer: ans.modelAnswer || "",
+            justificationModelAnswer: ans.justificationModelAnswer || ""
           };
         })
       }));
@@ -1255,7 +1646,7 @@ async function renderBuilder(params) {
       requireAccessCode: false,
       accessCode: "",
       requireFullscreen: false,
-      forms: [{ id: "A", name: "Form A", questions: [] }]
+      forms: [{ id: "A", name: "النموذج أ", questions: [] }]
     };
   }
   renderBuilderUI();
@@ -1265,7 +1656,6 @@ async function renderBuilder(params) {
 function renderBuilderUI() {
   const d = builderState.data;
 
-  // Info fields
   const setVal = (sel, v) => { const e = $(sel); if (e) e.value = v ?? ""; };
   setVal("#examTitle", d.title);
   setVal("#examGrade", d.grade);
@@ -1274,7 +1664,6 @@ function renderBuilderUI() {
   setVal("#examStart", toLocalInput(d.startAt));
   setVal("#examEnd", toLocalInput(d.endAt));
 
-  // Subject dropdown — only teacher's subjects
   const subjSel = $("#examSubject");
   if (subjSel) {
     subjSel.innerHTML = `<option value="">${t("builder.info.selectSubject")}</option>`;
@@ -1286,14 +1675,12 @@ function renderBuilderUI() {
     subjSel.value = d.subject || "";
   }
 
-  // Display mode
   $$('[data-field="displayMode"]').forEach((radio) => {
     radio.checked = radio.value === (d.displayMode || "scroll");
     const card = radio.closest(".mode-card");
     if (card) card.classList.toggle("is-selected", radio.checked);
   });
 
-  // Checkboxes
   const setChk = (sel, v) => { const e = $(sel); if (e) e.checked = !!v; };
   setChk('[data-field="shuffleQuestions"]', d.shuffleQuestions);
   setChk('[data-field="requireAccessCode"]', d.requireAccessCode);
@@ -1348,8 +1735,8 @@ function switchBuilderStep(step) {
 
 function updateBuilderTotalScore() {
   const total = getAllBuilderQuestions().reduce((s, q) => s + (Number(q.score) || 0), 0);
-  const el = $("[data-total-score]");
-  if (el) el.textContent = String(total);
+  const e = $("[data-total-score]");
+  if (e) e.textContent = String(total);
 }
 
 function getAllBuilderQuestions() {
@@ -1366,7 +1753,7 @@ function renderBuilderQuestions() {
 
   if (!questions.length) {
     host.appendChild(el("div", { class: "empty", style: "padding:var(--sp-8)" }, [
-      el("p", { class: "text-muted", text: currentLang === "ar" ? "لا توجد أسئلة بعد." : "No questions yet." })
+      el("p", { class: "text-muted", text: "لا توجد أسئلة بعد." })
     ]));
     return;
   }
@@ -1374,10 +1761,20 @@ function renderBuilderQuestions() {
   questions.forEach((q, idx) => host.appendChild(buildQuestionCard(q, idx)));
 }
 
+function qTypeLabel(type) {
+  return {
+    mcq: "اختيار من متعدد",
+    mcq_just: "اختيار + تبرير",
+    tf: "صح / خطأ",
+    tf_just: "صح / خطأ + تبرير",
+    complete: "أكمل",
+    essay: "مقالي"
+  }[type] || type;
+}
+
 function buildQuestionCard(q, idx) {
   const card = el("div", { class: "question-card" });
 
-  // Header
   const head = el("div", { class: "question-card-head" });
   const numWrap = el("div", { class: "question-card-num" });
   numWrap.appendChild(el("span", { text: String(idx + 1) }));
@@ -1385,12 +1782,12 @@ function buildQuestionCard(q, idx) {
   head.appendChild(numWrap);
 
   const actions = el("div", { class: "question-card-actions" });
-  const dup = el("button", { class: "icon-btn", type: "button", title: "Duplicate" });
+  const dup = el("button", { class: "icon-btn", type: "button", title: t("question.duplicate") });
   dup.appendChild(svgIcon("duplicate", 16));
   dup.addEventListener("click", () => duplicateQuestion(idx));
   actions.appendChild(dup);
 
-  const del = el("button", { class: "icon-btn", type: "button", title: "Delete" });
+  const del = el("button", { class: "icon-btn", type: "button", title: t("question.delete") });
   del.appendChild(svgIcon("trash", 16));
   del.addEventListener("click", () => deleteQuestion(idx));
   actions.appendChild(del);
@@ -1398,7 +1795,6 @@ function buildQuestionCard(q, idx) {
   head.appendChild(actions);
   card.appendChild(head);
 
-  // Body
   const body = el("div", { class: "question-body" });
 
   const ta = el("textarea", { class: "textarea" });
@@ -1415,25 +1811,25 @@ function buildQuestionCard(q, idx) {
     const f = fileInput.files?.[0];
     if (!f) return;
     try {
-      toast(currentLang === "ar" ? "جارٍ الرفع…" : "Uploading…", "info", 2000);
+      toast("جارٍ الرفع…", "info", 2000);
       const url = await uploadQuestionImage(builderState.examId, f);
       q.imageUrl = url;
       renderBuilderQuestions();
       markDirty();
     } catch (err) {
       console.error(err);
-      toast(currentLang === "ar" ? "تعذّر رفع الصورة" : "Upload failed", "error");
+      toast("تعذّر رفع الصورة", "error");
     }
   });
   const uploadBtn = el("button", { class: "btn btn-outline btn-sm", type: "button" });
   uploadBtn.appendChild(svgIcon("image", 14));
-  uploadBtn.appendChild(document.createTextNode(" " + (currentLang === "ar" ? "صورة" : "Image")));
+  uploadBtn.appendChild(document.createTextNode(" " + t("question.image")));
   uploadBtn.addEventListener("click", () => fileInput.click());
   imgRow.appendChild(uploadBtn);
   if (q.imageUrl) {
     const preview = el("img", { src: q.imageUrl, style: "max-width:120px;border-radius:8px;border:1px solid var(--border-subtle)" });
     imgRow.appendChild(preview);
-    const rm = el("button", { class: "icon-btn", type: "button" });
+    const rm = el("button", { class: "icon-btn", type: "button", title: t("question.removeImage") });
     rm.appendChild(svgIcon("x", 14));
     rm.addEventListener("click", () => { q.imageUrl = null; renderBuilderQuestions(); markDirty(); });
     imgRow.appendChild(rm);
@@ -1442,19 +1838,16 @@ function buildQuestionCard(q, idx) {
   imgField.appendChild(imgRow);
   body.appendChild(imgField);
 
-  // Type-specific fields
+  // MCQ / MCQ + Justification
   if (q.type === "mcq" || q.type === "mcq_just") {
     const opts = el("div", { class: "question-options" });
     (q.options || []).forEach((opt, i) => {
       const row = el("div", { class: "option-row" });
-
       const radio = el("input", { type: "radio", name: "correct_" + q.id });
       radio.checked = q.correctIndex === i;
       radio.addEventListener("change", () => { q.correctIndex = i; markDirty(); });
       row.appendChild(radio);
-
       row.appendChild(el("span", { class: "option-label", text: String.fromCharCode(65 + i) }));
-
       const inp = el("input", { type: "text", class: "input", value: opt || "" });
       inp.placeholder = t("question.option") + " " + String.fromCharCode(65 + i);
       inp.addEventListener("input", () => { q.options[i] = inp.value; markDirty(); });
@@ -1487,8 +1880,27 @@ function buildQuestionCard(q, idx) {
       opts.appendChild(addBtn);
     }
     body.appendChild(opts);
+
+    // Justification model answer
+    if (q.type === "mcq_just") {
+      const jField = el("div", { class: "field mt-3" });
+      jField.appendChild(el("label", {
+        class: "field-label",
+        text: t("question.justificationModelAnswer")
+      }));
+      const jTa = el("textarea", { class: "textarea" });
+      jTa.placeholder = t("question.justificationPlaceholder");
+      jTa.value = q.justificationModelAnswer || "";
+      jTa.addEventListener("input", () => {
+        q.justificationModelAnswer = jTa.value;
+        markDirty();
+      });
+      jField.appendChild(jTa);
+      body.appendChild(jField);
+    }
   }
 
+  // TF / TF + Justification
   if (q.type === "tf" || q.type === "tf_just") {
     const wrap = el("div", { class: "question-options" });
     [{ v: true, l: t("question.true") }, { v: false, l: t("question.false") }].forEach(({ v, l }) => {
@@ -1501,8 +1913,26 @@ function buildQuestionCard(q, idx) {
       wrap.appendChild(row);
     });
     body.appendChild(wrap);
+
+    if (q.type === "tf_just") {
+      const jField = el("div", { class: "field mt-3" });
+      jField.appendChild(el("label", {
+        class: "field-label",
+        text: t("question.justificationModelAnswer")
+      }));
+      const jTa = el("textarea", { class: "textarea" });
+      jTa.placeholder = t("question.justificationPlaceholder");
+      jTa.value = q.justificationModelAnswer || "";
+      jTa.addEventListener("input", () => {
+        q.justificationModelAnswer = jTa.value;
+        markDirty();
+      });
+      jField.appendChild(jTa);
+      body.appendChild(jField);
+    }
   }
 
+  // Complete
   if (q.type === "complete") {
     const f = el("div", { class: "field" });
     f.appendChild(el("label", { class: "field-label", text: t("question.correct") }));
@@ -1512,6 +1942,7 @@ function buildQuestionCard(q, idx) {
     body.appendChild(f);
   }
 
+  // Essay
   if (q.type === "essay") {
     const f = el("div", { class: "field" });
     f.appendChild(el("label", { class: "field-label", text: t("question.model") }));
@@ -1542,17 +1973,6 @@ function buildQuestionCard(q, idx) {
   return card;
 }
 
-function qTypeLabel(type) {
-  return {
-    mcq: "MCQ",
-    mcq_just: "MCQ + Justify",
-    tf: "True/False",
-    tf_just: "T/F + Justify",
-    complete: "Complete",
-    essay: "Essay"
-  }[type] || type;
-}
-
 function addQuestion(type) {
   const q = {
     id: uid(10),
@@ -1560,9 +1980,10 @@ function addQuestion(type) {
     text: "",
     options: (type === "mcq" || type === "mcq_just") ? ["", "", "", ""] : [],
     correctIndex: 0,
-    correctBool: type === "tf" || type === "tf_just" ? null : null,
+    correctBool: null,
     correctText: "",
     modelAnswer: "",
+    justificationModelAnswer: "",
     imageUrl: null,
     score: 1
   };
@@ -1595,17 +2016,17 @@ function deleteQuestion(idx) {
 
 function showQuestionTypeModal() {
   const types = [
-    { type: "mcq", title: "Multiple Choice", hint: "One correct answer" },
-    { type: "mcq_just", title: "MCQ + Justification", hint: "Choice + written justification" },
-    { type: "tf", title: "True / False", hint: "Boolean statement" },
-    { type: "tf_just", title: "True / False + Justification", hint: "Boolean + written justification" },
-    { type: "complete", title: "Complete", hint: "Fill in the blank" },
-    { type: "essay", title: "Essay", hint: "Long-form manual graded" }
+    { type: "mcq", title: "اختيار من متعدد", hint: "إجابة واحدة صحيحة" },
+    { type: "mcq_just", title: "اختيار + تبرير", hint: "اختيار مع كتابة تبرير (تصحيح يدوي)" },
+    { type: "tf", title: "صح / خطأ", hint: "عبارة صح أو خطأ" },
+    { type: "tf_just", title: "صح / خطأ + تبرير", hint: "صح أو خطأ مع تبرير (تصحيح يدوي)" },
+    { type: "complete", title: "أكمل", hint: "إكمال الفراغ" },
+    { type: "essay", title: "مقالي", hint: "إجابة طويلة (تصحيح يدوي)" }
   ];
 
   const body = el("div", { class: "stack-sm" });
   types.forEach((tt) => {
-    const btn = el("button", { type: "button", class: "card", style: "text-align:left;cursor:pointer;padding:var(--sp-4)" });
+    const btn = el("button", { type: "button", class: "card", style: "text-align:right;cursor:pointer;padding:var(--sp-4)" });
     btn.appendChild(el("div", { class: "fw-semibold", text: tt.title }));
     btn.appendChild(el("div", { class: "text-sm text-muted mt-1", text: tt.hint }));
     btn.addEventListener("click", () => {
@@ -1616,13 +2037,12 @@ function showQuestionTypeModal() {
   });
 
   openModal({
-    title: currentLang === "ar" ? "اختر نوع السؤال" : "Choose question type",
+    title: "اختر نوع السؤال",
     body,
     actions: [{ label: t("action.cancel"), class: "btn-ghost" }]
   });
 }
 
-/* Forms */
 function renderBuilderForms() {
   const tabs = $("[data-forms-tabs]");
   const listHost = $("[data-form-questions-list]");
@@ -1667,8 +2087,8 @@ function renderBuilderForms() {
 function addForm() {
   const usedLetters = builderState.data.forms.map((f) => f.id);
   const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-  const nextLetter = letters.find((l) => !usedLetters.includes(l)) || "X" + uid(3);
-  const newForm = { id: nextLetter, name: `Form ${nextLetter}`, questions: [] };
+  const nextLetter = letters.find((l) => !usedLetters.includes(l)) || ("X" + uid(3));
+  const newForm = { id: nextLetter, name: `النموذج ${nextLetter}`, questions: [] };
   builderState.data.forms.push(newForm);
   builderState.currentFormIndex = builderState.data.forms.length - 1;
   renderBuilderForms();
@@ -1687,7 +2107,6 @@ function removeForm(idx) {
   markDirty();
 }
 
-/* Dirty / Autosave */
 function markDirty() {
   const state = $("[data-builder-save-state]");
   if (state) state.textContent = t("common.saving");
@@ -1699,7 +2118,6 @@ const autosaveBuilder = debounce(async () => {
   const d = builderState.data;
   if (!d.title.trim()) return;
 
-  // Separate questions and answers
   const cleanForms = d.forms.map((form) => ({
     id: form.id,
     name: form.name,
@@ -1724,6 +2142,11 @@ const autosaveBuilder = debounce(async () => {
       else if (q.type === "tf" || q.type === "tf_just") a.correctBool = q.correctBool;
       else if (q.type === "complete") a.correctText = q.correctText || "";
       else if (q.type === "essay") a.modelAnswer = q.modelAnswer || "";
+
+      if (q.type === "mcq_just" || q.type === "tf_just") {
+        a.justificationModelAnswer = q.justificationModelAnswer || "";
+      }
+
       answerKey[q.id] = a;
     });
   });
@@ -1787,27 +2210,27 @@ const autosaveBuilder = debounce(async () => {
 async function publishExam() {
   const d = builderState.data;
   const errors = [];
-  if (!d.title.trim()) errors.push(currentLang === "ar" ? "اسم الامتحان مطلوب" : "Exam name is required");
-  if (!d.subject) errors.push(currentLang === "ar" ? "المادة مطلوبة" : "Subject is required");
-  if (!d.grade) errors.push(currentLang === "ar" ? "الصف مطلوب" : "Grade is required");
+  if (!d.title.trim()) errors.push("اسم الامتحان مطلوب");
+  if (!d.subject) errors.push("المادة مطلوبة");
+  if (!d.grade) errors.push("الصف مطلوب");
   const totalQ = getAllBuilderQuestions().length;
-  if (!totalQ) errors.push(currentLang === "ar" ? "أضف سؤالاً واحدًا على الأقل" : "Add at least one question");
+  if (!totalQ) errors.push("أضف سؤالاً واحدًا على الأقل");
 
   if (errors.length) {
     openModal({
-      title: `${errors.length} ${currentLang === "ar" ? "مشكلة" : errors.length > 1 ? "issues" : "issue"}`,
-      body: el("ul", { style: "padding-inline-start:20px;line-height:1.9" }, errors.map((e) => el("li", { text: e }))),
-      actions: [{ label: "OK", class: "btn-primary" }]
+      title: `${errors.length} ${errors.length === 1 ? "مشكلة" : "مشاكل"}`,
+      body: el("ul", { style: "padding-inline-start:20px;line-height:2" }, errors.map((e) => el("li", { text: e }))),
+      actions: [{ label: t("action.ok"), class: "btn-primary" }]
     });
     return;
   }
 
   const summary = el("div", { class: "stack-sm" });
   [
-    [currentLang === "ar" ? "الاسم" : "Title", d.title],
-    [currentLang === "ar" ? "الأسئلة" : "Questions", String(totalQ)],
-    [currentLang === "ar" ? "النماذج" : "Forms", String(d.forms.length)],
-    [currentLang === "ar" ? "المدة" : "Duration", `${d.duration} ${currentLang === "ar" ? "دقيقة" : "min"}`]
+    ["الاسم", d.title],
+    ["الأسئلة", String(totalQ)],
+    ["النماذج", String(d.forms.length)],
+    ["المدة", `${d.duration} دقيقة`]
   ].forEach(([k, v]) => {
     summary.appendChild(el("div", { class: "row-between" }, [
       el("span", { text: k }),
@@ -1816,7 +2239,7 @@ async function publishExam() {
   });
 
   openModal({
-    title: currentLang === "ar" ? "نشر الامتحان؟" : "Publish exam?",
+    title: "نشر الامتحان؟",
     body: summary,
     actions: [
       { label: t("action.cancel"), class: "btn-ghost" },
@@ -1829,48 +2252,43 @@ async function publishExam() {
             status: "scheduled",
             publishedAt: serverTimestamp()
           });
-          toast(currentLang === "ar" ? "تم نشر الامتحان" : "Exam published", "success");
+          toast("تم نشر الامتحان", "success");
           navigate(`/app/exam?id=${builderState.examId}`);
         } catch (err) {
           console.error(err);
-          toast(currentLang === "ar" ? "فشل النشر" : "Publish failed", "error");
+          toast("فشل النشر", "error");
         }
       }}
     ]
   });
 }
 
-/* Builder events */
 function initBuilderEvents() {
   const container = $('[data-page="app"]');
   if (!container || container.dataset.builderBound) return;
   container.dataset.builderBound = "1";
 
   container.addEventListener("click", (e) => {
-    // Step buttons
     const stepBtn = e.target.closest(".builder-step");
     if (stepBtn) { switchBuilderStep(stepBtn.dataset.step); return; }
 
-    // Back button
     if (e.target.closest("[data-builder-back]")) {
       const idx = BUILDER_STEPS.indexOf(builderState.currentStep);
       if (idx > 0) switchBuilderStep(BUILDER_STEPS[idx - 1]);
       return;
     }
 
-    // Next button
     if (e.target.closest("[data-builder-next]")) {
       const idx = BUILDER_STEPS.indexOf(builderState.currentStep);
       if (idx < BUILDER_STEPS.length - 1) {
-        // Validate current step
         if (builderState.currentStep === "info") {
           const d = builderState.data;
-          if (!d.title.trim()) { toast(currentLang === "ar" ? "أدخل اسم الامتحان" : "Please enter exam name", "warning"); return; }
-          if (!d.subject) { toast(currentLang === "ar" ? "اختر المادة" : "Please select subject", "warning"); return; }
-          if (!d.grade) { toast(currentLang === "ar" ? "اختر الصف" : "Please select grade", "warning"); return; }
+          if (!d.title.trim()) { toast("أدخل اسم الامتحان", "warning"); return; }
+          if (!d.subject) { toast("اختر المادة", "warning"); return; }
+          if (!d.grade) { toast("اختر الصف", "warning"); return; }
         }
         if (builderState.currentStep === "questions" && !getAllBuilderQuestions().length) {
-          toast(currentLang === "ar" ? "أضف سؤالاً واحدًا على الأقل" : "Add at least one question", "warning");
+          toast("أضف سؤالاً واحدًا على الأقل", "warning");
           return;
         }
         switchBuilderStep(BUILDER_STEPS[idx + 1]);
@@ -1878,37 +2296,29 @@ function initBuilderEvents() {
       return;
     }
 
-    // Save
     if (e.target.closest("[data-builder-save]")) {
       autosaveBuilder();
       toast(t("common.saved"), "success");
       return;
     }
 
-    // Publish
     if (e.target.closest("[data-builder-publish]")) { publishExam(); return; }
-
-    // Cancel
     if (e.target.closest("[data-builder-cancel]")) { navigate("/app/exams"); return; }
 
-    // Preview
     if (e.target.closest("[data-builder-preview]")) {
-      if (!builderState.examId) { toast(currentLang === "ar" ? "احفظ أولاً" : "Save first", "warning"); return; }
+      if (!builderState.examId) { toast("احفظ أولاً", "warning"); return; }
       window.open(location.pathname + `#/exam?id=${builderState.examId}&preview=1`, "_blank");
       return;
     }
 
-    // Add question
     if (e.target.closest("[data-add-question]") || e.target.closest("[data-add-form-question]")) {
       showQuestionTypeModal();
       return;
     }
 
-    // Add form
     if (e.target.closest("[data-add-form]")) { addForm(); return; }
   });
 
-  // Field inputs
   container.addEventListener("input", (e) => {
     const f = e.target.dataset?.field;
     if (!f) return;
@@ -1923,7 +2333,6 @@ function initBuilderEvents() {
     markDirty();
   });
 
-  // Checkboxes / radios
   container.addEventListener("change", (e) => {
     const f = e.target.dataset?.field;
     if (!f) return;
@@ -1935,16 +2344,13 @@ function initBuilderEvents() {
       });
     } else if (e.target.type === "checkbox") {
       d[f] = e.target.checked;
-      if (f === "requireAccessCode") {
-        // Just mark dirty
-      }
     }
     markDirty();
   });
 }
 
 /* ============================================================
-   EXAM DETAILS (Teacher)
+   EXAM DETAILS
    ============================================================ */
 async function renderExamDetails(params) {
   const examId = params?.get("id");
@@ -1961,6 +2367,12 @@ async function renderExamDetails(params) {
     return;
   }
 
+  // Auto-grade unattempted
+  try {
+    const graded = await autoGradeAttempts(examId, exam);
+    if (graded > 0) toast(`تم تصحيح ${graded} ورقة`, "success");
+  } catch (err) { console.warn(err); }
+
   const attempts = await listAttempts(examId);
   const status = computeStatus(exam);
 
@@ -1968,10 +2380,10 @@ async function renderExamDetails(params) {
 
   const head = el("div", { class: "exam-details-head" });
   const left = el("div", {});
-  left.appendChild(el("h2", { class: "exam-details-title", text: exam.title || "Untitled" }));
+  left.appendChild(el("h2", { class: "exam-details-title", text: exam.title || "بدون اسم" }));
   left.appendChild(el("div", {
     class: "exam-details-meta",
-    text: `${subjectLabel(exam.subject)} · ${exam.grade || "—"} · ${exam.totalQuestions || 0} Q · ${exam.duration || 0} min`
+    text: `${subjectLabel(exam.subject)} · ${gradeLabel(exam.grade)} · ${exam.totalQuestions || 0} سؤال · ${exam.duration || 0} دقيقة`
   }));
   head.appendChild(left);
 
@@ -1989,12 +2401,10 @@ async function renderExamDetails(params) {
   head.appendChild(actions);
   host.appendChild(head);
 
-  // Tabs
   const tabs = el("div", { class: "exam-tabs" });
-  ["students", "questions", "grading"].forEach((name, i) => {
-    const label = name === "grading" ? t("action.grade") : name === "students" ? t("common.student") : t("builder.questions.title");
-    const tab = el("button", { class: "exam-tab", type: "button", "data-tab": name, text: label });
-    tabs.appendChild(tab);
+  ["students", "questions", "grading"].forEach((name) => {
+    const label = name === "grading" ? t("action.grade") : name === "students" ? "الطلاب" : "الأسئلة";
+    tabs.appendChild(el("button", { class: "exam-tab", type: "button", "data-tab": name, text: label }));
   });
   host.appendChild(tabs);
 
@@ -2020,8 +2430,8 @@ async function renderExamDetails(params) {
 function renderStudentsTab(host, exam, attempts) {
   if (!attempts.length) {
     host.appendChild(el("div", { class: "empty" }, [
-      el("h3", { text: currentLang === "ar" ? "لا يوجد طلاب بعد" : "No submissions yet" }),
-      el("p", { text: currentLang === "ar" ? "شارك رابط الامتحان للبدء." : "Share the exam link to get started." })
+      el("h3", { text: t("grading.noStudents") }),
+      el("p", { text: t("grading.shareToStart") })
     ]));
     return;
   }
@@ -2053,16 +2463,21 @@ function renderStudentsTab(host, exam, attempts) {
 }
 
 function renderQuestionsTab(host, exam) {
-  const forms = exam.forms && exam.forms.length ? exam.forms : [{ id: "A", name: "Form A", questions: exam.questions || [] }];
+  const forms = exam.forms && exam.forms.length
+    ? exam.forms
+    : [{ id: "A", name: "النموذج أ", questions: exam.questions || [] }];
   const wrap = el("div", { class: "stack" });
   forms.forEach((form) => {
     const block = el("div", { class: "card" });
-    block.appendChild(el("h3", { class: "builder-panel-title", text: `${form.name} — ${(form.questions || []).length} ${t("common.questions")}` }));
+    block.appendChild(el("h3", {
+      class: "builder-panel-title",
+      text: `${form.name} — ${(form.questions || []).length} سؤال`
+    }));
     (form.questions || []).forEach((q, i) => {
       const row = el("div", { class: "grading-card mt-3" });
       row.appendChild(el("div", { class: "row-between mb-2" }, [
-        el("span", { class: "fw-semibold", text: `Q${i + 1} · ${qTypeLabel(q.type)}` }),
-        el("span", { class: "badge badge-draft", text: `${q.score} ${t("common.points")}` })
+        el("span", { class: "fw-semibold", text: `س${i + 1} · ${qTypeLabel(q.type)}` }),
+        el("span", { class: "badge badge-draft", text: `${q.score} نقطة` })
       ]));
       row.appendChild(el("p", { text: q.text || "—" }));
       block.appendChild(row);
@@ -2075,9 +2490,7 @@ function renderQuestionsTab(host, exam) {
 function renderGradingList(host, exam, attempts) {
   const pending = attempts.filter((a) => a.status === "submitted" && !a.gradedAt);
   if (!pending.length) {
-    host.appendChild(el("div", { class: "empty" }, [
-      el("p", { text: currentLang === "ar" ? "لا يوجد ما ينتظر التصحيح." : "Nothing waiting for grading." })
-    ]));
+    host.appendChild(el("div", { class: "empty" }, [el("p", { text: t("grading.nothingPending") })]));
     return;
   }
   const wrap = el("div", { class: "stack" });
@@ -2097,7 +2510,7 @@ function renderGradingList(host, exam, attempts) {
 }
 
 /* ============================================================
-   AUTO-GRADE (in teacher's browser)
+   AUTO-GRADE
    ============================================================ */
 async function autoGradeAttempts(examId, exam) {
   const answersMap = await getExamAnswers(examId);
@@ -2161,32 +2574,96 @@ function getAllExamQuestions(exam) {
   return exam.questions || [];
 }
 
+/* ============================================================
+   SHARE EXAM (with QR)
+   ============================================================ */
 function shareExam(exam) {
   const url = `${location.origin}${location.pathname}#/exam?id=${exam.id}`;
+
   const body = el("div", { class: "stack" });
-  const f = el("div", { class: "field" });
-  f.appendChild(el("label", { class: "field-label", text: currentLang === "ar" ? "رابط الامتحان" : "Exam link" }));
-  const row = el("div", { class: "row" });
-  const inp = el("input", { class: "input flex-1", type: "text", readonly: "readonly", value: url });
-  row.appendChild(inp);
-  const copyBtn = el("button", { class: "btn btn-outline btn-sm", type: "button", text: "Copy" });
+
+  const linkField = el("div", { class: "field" });
+  linkField.appendChild(el("label", { class: "field-label", text: t("share.linkLabel") }));
+  const linkRow = el("div", { class: "row" });
+  const linkInput = el("input", {
+    class: "input flex-1",
+    type: "text",
+    readonly: "readonly",
+    value: url
+  });
+  linkInput.addEventListener("click", () => linkInput.select());
+  linkRow.appendChild(linkInput);
+
+  const copyBtn = el("button", { class: "btn btn-outline btn-sm", type: "button", text: t("share.copy") });
   copyBtn.addEventListener("click", () => {
     navigator.clipboard.writeText(url);
-    toast("Copied", "success");
+    toast(t("share.copied"), "success");
   });
-  row.appendChild(copyBtn);
-  f.appendChild(row);
-  body.appendChild(f);
+  linkRow.appendChild(copyBtn);
+  linkField.appendChild(linkRow);
+  body.appendChild(linkField);
+
+  const qrSection = el("div", { class: "qr-section" });
+  qrSection.appendChild(el("div", {
+    class: "field-label text-center",
+    text: t("share.scanQR")
+  }));
+  const qrWrap = el("div", { class: "qr-wrap", id: "qrContainer" });
+  qrSection.appendChild(qrWrap);
+  body.appendChild(qrSection);
 
   openModal({
-    title: currentLang === "ar" ? "شارك الامتحان" : "Share exam",
+    title: t("share.title"),
     body,
-    actions: [{ label: currentLang === "ar" ? "إغلاق" : "Close", class: "btn-primary" }]
+    className: "share-exam-modal",
+    actions: [
+      {
+        label: t("share.downloadQR"),
+        class: "btn-outline",
+        keepOpen: true,
+        onClick: () => downloadQR(exam.title || "امتحان")
+      },
+      { label: t("action.close"), class: "btn-primary" }
+    ]
   });
+
+  setTimeout(() => {
+    const container = document.getElementById("qrContainer");
+    if (!container || typeof QRCode === "undefined") return;
+    container.innerHTML = "";
+    new QRCode(container, {
+      text: url,
+      width: 220,
+      height: 220,
+      colorDark: "#0f172a",
+      colorLight: "#ffffff",
+      correctLevel: QRCode.CorrectLevel.H
+    });
+  }, 50);
+}
+
+function downloadQR(examTitle) {
+  const container = document.getElementById("qrContainer");
+  if (!container) return;
+  const canvas = container.querySelector("canvas");
+  const img = container.querySelector("img");
+  let dataURL = null;
+  if (canvas) dataURL = canvas.toDataURL("image/png");
+  else if (img && img.src) dataURL = img.src;
+  if (!dataURL) { toast(t("share.qrFailed"), "error"); return; }
+
+  const safe = (examTitle || "exam").replace(/[^a-zA-Z0-9\u0600-\u06FF]/g, "_");
+  const link = document.createElement("a");
+  link.download = `QR_${safe}.png`;
+  link.href = dataURL;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  toast(t("share.downloaded"), "success");
 }
 
 /* ============================================================
-   GRADING (Teacher)
+   GRADING
    ============================================================ */
 async function renderGrading(params) {
   const examId = params?.get("exam");
@@ -2196,7 +2673,7 @@ async function renderGrading(params) {
   host.innerHTML = "";
 
   if (!examId || !attemptId) {
-    host.appendChild(el("div", { class: "empty" }, [el("p", { text: "Missing info." })]));
+    host.appendChild(el("div", { class: "empty" }, [el("p", { text: "بيانات ناقصة." })]));
     return;
   }
 
@@ -2217,12 +2694,15 @@ async function renderGrading(params) {
 
   const head = el("div", { class: "card grading-student-head" });
   const info = el("div", {});
-  info.appendChild(el("h2", { text: attempt.studentName || "Student" }));
+  info.appendChild(el("h2", { text: attempt.studentName || "طالب" }));
   info.appendChild(el("p", { class: "text-muted text-sm", text: fmtDate(attempt.submittedAt) }));
   head.appendChild(info);
 
   const headActions = el("div", { class: "row" });
-  headActions.appendChild(el("span", { class: `badge badge-${attempt.status || "draft"}`, text: t("status." + (attempt.status || "draft")) }));
+  headActions.appendChild(el("span", {
+    class: `badge badge-${attempt.status || "draft"}`,
+    text: t("status." + (attempt.status || "draft"))
+  }));
   const backBtn = el("button", { class: "btn btn-ghost btn-sm", type: "button", text: t("action.back") });
   backBtn.addEventListener("click", () => navigate(`/app/exam?id=${examId}`));
   headActions.appendChild(backBtn);
@@ -2238,11 +2718,10 @@ async function renderGrading(params) {
     const key = answersMap[q.id] || {};
 
     const card = el("div", { class: "grading-card" });
-    card.appendChild(el("div", { class: "grading-question", text: `Q${i + 1} · ${q.text}` }));
+    card.appendChild(el("div", { class: "grading-question", text: `س${i + 1} · ${q.text}` }));
 
-    // Student answer
     const ansBlock = el("div", { class: "grading-answer-block" });
-    ansBlock.appendChild(el("strong", { text: currentLang === "ar" ? "إجابة الطالب" : "Student answer" }));
+    ansBlock.appendChild(el("strong", { text: t("grading.studentAnswer") }));
 
     let ansText = "—";
     if (q.type === "mcq" || q.type === "mcq_just") ansText = q.options?.[a.selectedIndex] || "—";
@@ -2253,16 +2732,15 @@ async function renderGrading(params) {
 
     if (a.justification) {
       ansBlock.appendChild(el("div", { class: "mt-2", style: "white-space:pre-wrap" }, [
-        el("strong", { text: currentLang === "ar" ? "التبرير" : "Justification" }),
+        el("strong", { text: t("grading.justification") }),
         el("div", { text: a.justification })
       ]));
     }
     card.appendChild(ansBlock);
 
-    // Correct answer (from examAnswers)
     if (q.type !== "essay") {
       const corBlock = el("div", { class: "grading-answer-block" });
-      corBlock.appendChild(el("strong", { text: currentLang === "ar" ? "الإجابة الصحيحة" : "Correct answer" }));
+      corBlock.appendChild(el("strong", { text: t("result.correctAnswer") }));
       let correctText = "—";
       if (q.type === "mcq" || q.type === "mcq_just") correctText = q.options?.[key.correctIndex] || "—";
       else if (q.type === "tf" || q.type === "tf_just") correctText = key.correctBool ? t("question.true") : t("question.false");
@@ -2273,9 +2751,17 @@ async function renderGrading(params) {
 
     if (q.type === "essay" && key.modelAnswer) {
       const modelBlock = el("div", { class: "grading-answer-block" });
-      modelBlock.appendChild(el("strong", { text: currentLang === "ar" ? "الإجابة النموذجية" : "Model answer" }));
+      modelBlock.appendChild(el("strong", { text: t("result.modelAnswer") }));
       modelBlock.appendChild(el("div", { style: "white-space:pre-wrap", text: key.modelAnswer }));
       card.appendChild(modelBlock);
+    }
+
+    // Justification model answer
+    if ((q.type === "mcq_just" || q.type === "tf_just") && key.justificationModelAnswer) {
+      const jBlock = el("div", { class: "grading-answer-block" });
+      jBlock.appendChild(el("strong", { text: t("result.modelJustification") }));
+      jBlock.appendChild(el("div", { style: "white-space:pre-wrap", text: key.justificationModelAnswer }));
+      card.appendChild(jBlock);
     }
 
     if (isManual) {
@@ -2289,14 +2775,14 @@ async function renderGrading(params) {
       card.appendChild(scoreRow);
 
       const fbField = el("div", { class: "field mt-3" });
-      fbField.appendChild(el("label", { class: "field-label", text: currentLang === "ar" ? "ملاحظة" : "Feedback" }));
+      fbField.appendChild(el("label", { class: "field-label", text: t("grading.feedback") }));
       const fbInput = el("input", { type: "text", class: "input", value: feedback[q.id] || "" });
       fbInput.addEventListener("input", () => { feedback[q.id] = fbInput.value; });
       fbField.appendChild(fbInput);
       card.appendChild(fbField);
     } else {
       const autoInfo = el("div", { class: "text-sm mt-2" });
-      autoInfo.appendChild(el("span", { class: "text-muted", text: "Auto: " }));
+      autoInfo.appendChild(el("span", { class: "text-muted", text: t("grading.auto") + " " }));
       autoInfo.appendChild(el("strong", { text: `${a.autoScore || 0} / ${q.score || 1}` }));
       card.appendChild(autoInfo);
     }
@@ -2304,9 +2790,8 @@ async function renderGrading(params) {
     list.appendChild(card);
   });
 
-  // Overall feedback
   const fbCard = el("div", { class: "card" });
-  fbCard.appendChild(el("label", { class: "field-label mb-2", text: currentLang === "ar" ? "ملاحظات عامة" : "Overall feedback" }));
+  fbCard.appendChild(el("label", { class: "field-label mb-2", text: t("grading.examFeedback") }));
   const fbTa = el("textarea", { class: "textarea" });
   fbTa.value = attempt.examFeedback || "";
   fbCard.appendChild(fbTa);
@@ -2354,10 +2839,16 @@ async function renderGrading(params) {
   publishBtn.addEventListener("click", async () => {
     try {
       await saveGrading();
+      const allAttempts = await listAttempts(examId);
+      const ungraded = allAttempts.filter((a) => !a.gradedAt && a.status === "submitted");
+      if (ungraded.length) {
+        toast(`جارٍ تصحيح ${ungraded.length} محاولة…`, "info");
+        await autoGradeAttempts(examId, exam);
+      }
       await updateDoc(doc(db, "exams", examId), { resultPublishedAt: serverTimestamp() });
-      toast(currentLang === "ar" ? "تم نشر النتيجة" : "Result published", "success");
+      toast("تم نشر النتيجة", "success");
       navigate(`/app/exam?id=${examId}`);
-    } catch (err) { console.error(err); toast("Publish failed", "error"); }
+    } catch (err) { console.error(err); toast("فشل النشر", "error"); }
   });
   actRow.appendChild(publishBtn);
   actions.appendChild(actRow);
@@ -2365,7 +2856,7 @@ async function renderGrading(params) {
 }
 
 /* ============================================================
-   PROFILE / SETTINGS / PACKAGES
+   PROFILE / SETTINGS
    ============================================================ */
 function renderProfile() {
   if (!currentProfile) return;
@@ -2390,13 +2881,6 @@ function renderSettings() {
     if (!r.dataset.bound) {
       r.dataset.bound = "1";
       r.addEventListener("change", () => { if (r.checked) setTheme(r.value); });
-    }
-  });
-  $$("[data-setting-lang]").forEach((r) => {
-    r.checked = r.value === currentLang;
-    if (!r.dataset.bound) {
-      r.dataset.bound = "1";
-      r.addEventListener("change", () => { if (r.checked) setLang(r.value); });
     }
   });
 }
@@ -2424,8 +2908,8 @@ async function renderExam(params) {
   if (!examId) {
     loading.hidden = true;
     errorBox.hidden = false;
-    $("[data-exam-error-title]").textContent = "Missing exam";
-    $("[data-exam-error-message]").textContent = "No exam ID provided.";
+    $("[data-exam-error-title]").textContent = "بيانات ناقصة";
+    $("[data-exam-error-message]").textContent = "لم يتم تحديد رقم الامتحان.";
     return;
   }
 
@@ -2436,11 +2920,10 @@ async function renderExam(params) {
     loading.hidden = true;
     errorBox.hidden = false;
     $("[data-exam-error-title]").textContent = t("common.notFound");
-    $("[data-exam-error-message]").textContent = "This exam is unavailable.";
+    $("[data-exam-error-message]").textContent = "هذا الامتحان غير متاح.";
     return;
   }
 
-  // Preview mode for teacher
   if (preview && currentUser && currentProfile?.uid === exam.ownerId) {
     loading.hidden = true;
     shell.hidden = false;
@@ -2454,21 +2937,18 @@ async function renderExam(params) {
   if (start && now < start) {
     loading.hidden = true;
     errorBox.hidden = false;
-    $("[data-exam-error-title]").textContent = currentLang === "ar" ? "الامتحان لم يبدأ" : "Exam not started";
-    $("[data-exam-error-message]").textContent = currentLang === "ar"
-      ? `يفتح في ${fmtDate(exam.startAt)}`
-      : `Opens at ${fmtDate(exam.startAt)}`;
+    $("[data-exam-error-title]").textContent = "الامتحان لم يبدأ";
+    $("[data-exam-error-message]").textContent = `يفتح في ${fmtDate(exam.startAt)}`;
     return;
   }
   if (end && now > end) {
     loading.hidden = true;
     errorBox.hidden = false;
-    $("[data-exam-error-title]").textContent = currentLang === "ar" ? "الامتحان مغلق" : "Exam closed";
-    $("[data-exam-error-message]").textContent = currentLang === "ar" ? "انتهى هذا الامتحان." : "This exam has ended.";
+    $("[data-exam-error-title]").textContent = "الامتحان مغلق";
+    $("[data-exam-error-message]").textContent = "انتهى هذا الامتحان.";
     return;
   }
 
-  // Check existing attempt
   const existing = JSON.parse(localStorage.getItem(EXAM_STATE_KEY(examId)) || "null");
   if (existing && existing.attemptId) {
     try {
@@ -2477,6 +2957,7 @@ async function renderExam(params) {
         const data = snap.data();
         if (data.status === "submitted" || data.status === "graded") {
           sessionStorage.setItem("qeyasquiz.lastAttempt", existing.attemptId);
+          localStorage.setItem("qeyasquiz.lastAttempt", existing.attemptId);
           loading.hidden = true;
           navigate("/result");
           return;
@@ -2508,7 +2989,7 @@ function showEntryModal(exam) {
   const form = $("[data-entry-form]");
   const submit = $("[data-entry-submit]");
 
-  title.textContent = exam.title || "Exam";
+  title.textContent = exam.title || "امتحان";
 
   if (exam.teacherName) {
     teacherBox.hidden = false;
@@ -2521,10 +3002,10 @@ function showEntryModal(exam) {
 
   meta.innerHTML = "";
   [
-    [t("common.subject"), subjectLabel(exam.subject)],
-    [t("common.grade"), exam.grade || "—"],
-    [t("common.duration"), `${exam.duration || 0} min`],
-    [t("common.questions"), String(exam.totalQuestions || 0)]
+    ["المادة", subjectLabel(exam.subject)],
+    ["الصف", gradeLabel(exam.grade)],
+    ["المدة", `${exam.duration || 0} دقيقة`],
+    ["الأسئلة", String(exam.totalQuestions || 0)]
   ].forEach(([k, v]) => {
     const item = el("div", { class: "entry-meta-item" });
     item.appendChild(el("span", { class: "entry-meta-label", text: k }));
@@ -2534,7 +3015,6 @@ function showEntryModal(exam) {
 
   codeField.hidden = !exam.requireAccessCode;
 
-  // Restore saved name
   const savedName = localStorage.getItem("qeyasquiz.studentName") || "";
   nameInput.value = savedName;
   codeInput.value = "";
@@ -2551,14 +3031,14 @@ function showEntryModal(exam) {
     const name = nameInput.value.trim();
     if (name.length < 3) {
       nameError.hidden = false;
-      nameError.textContent = currentLang === "ar" ? "أدخل اسمك الكامل (3 أحرف على الأقل)" : "Please enter your full name (min 3 characters).";
+      nameError.textContent = "أدخل اسمك الكامل (3 أحرف على الأقل)";
       ok = false;
     } else nameError.hidden = true;
 
     if (exam.requireAccessCode) {
       if (codeInput.value.trim() !== (exam.accessCode || "")) {
         codeError.hidden = false;
-        codeError.textContent = currentLang === "ar" ? "كود غير صحيح" : "Invalid access code.";
+        codeError.textContent = "كود غير صحيح";
         ok = false;
       } else codeError.hidden = true;
     }
@@ -2576,13 +3056,15 @@ function showEntryModal(exam) {
     } catch (err) {
       console.error(err);
       submit.classList.remove("is-loading");
-      toast(currentLang === "ar" ? "تعذّر بدء الامتحان" : "Could not start exam", "error");
+      toast("تعذّر بدء الامتحان", "error");
     }
   };
 }
 
 async function createAttempt(exam, studentName) {
-  const forms = exam.forms && exam.forms.length ? exam.forms : [{ id: "A", name: "Form A", questions: exam.questions || [] }];
+  const forms = exam.forms && exam.forms.length
+    ? exam.forms
+    : [{ id: "A", name: "النموذج أ", questions: exam.questions || [] }];
   const chosenForm = forms[Math.floor(Math.random() * forms.length)];
   const formQuestions = chosenForm.questions || [];
 
@@ -2599,6 +3081,8 @@ async function createAttempt(exam, studentName) {
   const endLimit = exam.endAt?.toMillis ? exam.endAt.toMillis() : Infinity;
   const deadlineMs = Math.min(nowMs + durationMs, endLimit);
 
+  const resultCode = generateResultCode();
+
   const payload = {
     examId: exam.id,
     formId: chosenForm.id,
@@ -2611,6 +3095,7 @@ async function createAttempt(exam, studentName) {
     startedAt: serverTimestamp(),
     startedAtMs: nowMs,
     deadlineMs,
+    resultCode,
     anticheatEvents: [],
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp()
@@ -2618,7 +3103,8 @@ async function createAttempt(exam, studentName) {
 
   const ref = await addDoc(collection(db, "attempts"), payload);
   localStorage.setItem(EXAM_STATE_KEY(exam.id), JSON.stringify({ attemptId: ref.id, examId: exam.id }));
-  return { id: ref.id, ...payload, startedAtMs: nowMs, deadlineMs };
+  localStorage.setItem("qeyasquiz.lastAttempt", ref.id);
+  return { id: ref.id, ...payload, startedAtMs: nowMs, deadlineMs, resultCode };
 }
 
 function showResumeModal(exam, existing) {
@@ -2640,7 +3126,9 @@ function showResumeModal(exam, existing) {
 function startExamRuntime(exam, opts) {
   const { attempt, preview = false } = opts;
 
-  const forms = exam.forms && exam.forms.length ? exam.forms : [{ id: "A", name: "Form A", questions: exam.questions || [] }];
+  const forms = exam.forms && exam.forms.length
+    ? exam.forms
+    : [{ id: "A", name: "النموذج أ", questions: exam.questions || [] }];
   const form = forms.find((f) => f.id === attempt.formId) || forms[0];
   const questions = form.questions || [];
 
@@ -2654,30 +3142,20 @@ function startExamRuntime(exam, opts) {
   const displayMode = exam.displayMode || "scroll";
 
   const state = {
-    exam,
-    attempt,
-    preview,
-    questions,
-    byId,
-    orderedIds,
-    displayMode,
+    exam, attempt, preview, questions, byId, orderedIds, displayMode,
     index: 0,
     answers: preview ? {} : (attempt.answers || {}),
     deadlineMs: preview ? Date.now() + (exam.duration || 60) * 60000 : attempt.deadlineMs,
-    timerInterval: null,
-    autosaveInterval: null,
-    heartbeatInterval: null,
+    timerInterval: null, autosaveInterval: null, heartbeatInterval: null,
     watcherUnsub: null,
-    dirty: false,
-    submitted: false,
-    pendingExam: null
+    dirty: false, submitted: false, pendingExam: null,
+    hiddenTimer: null, hiddenAt: 0
   };
-
   examRuntime = state;
 
-  $("[data-watermark-teacher]").textContent = exam.teacherName || "";
-  $("[data-exam-title]").textContent = exam.title || "Exam";
-  $("[data-exam-meta]").textContent = `${subjectLabel(exam.subject)} · ${exam.grade || ""}`;
+  $("[data-watermark-teacher]").textContent = `${attempt.studentName || ""} · QeyasQuiz`;
+  $("[data-exam-title]").textContent = exam.title || "امتحان";
+  $("[data-exam-meta]").textContent = `${subjectLabel(exam.subject)} · ${gradeLabel(exam.grade)}`;
 
   $("[data-questions-scroll]").hidden = true;
   $("[data-questions-single]").hidden = true;
@@ -2712,7 +3190,6 @@ function startExamRuntime(exam, opts) {
   if (prevBtn) prevBtn.onclick = () => { if (state.index > 0) showSingleQuestion(state.index - 1); };
   if (nextBtn) nextBtn.onclick = () => { if (state.index < state.orderedIds.length - 1) showSingleQuestion(state.index + 1); };
 
-  // Warn on unload
   window.addEventListener("beforeunload", (e) => {
     if (!state.submitted && !state.preview) {
       e.preventDefault();
@@ -2722,13 +3199,11 @@ function startExamRuntime(exam, opts) {
   });
 }
 
-/* ---- Scroll Mode ---- */
 function renderScrollMode() {
   const s = examRuntime;
   const host = $("[data-questions-host-scroll]");
   if (!host) return;
   host.innerHTML = "";
-
   s.orderedIds.forEach((qid, i) => {
     const q = s.byId[qid];
     if (!q) return;
@@ -2736,11 +3211,9 @@ function renderScrollMode() {
     block.id = `qblock_${qid}`;
     host.appendChild(block);
   });
-
   updateProgress();
 }
 
-/* ---- Single Mode ---- */
 function renderSingleMode() {
   renderSingleNavList();
   showSingleQuestion(0);
@@ -2799,7 +3272,6 @@ function showSingleQuestion(idx) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-/* ---- Shared ---- */
 function buildQuestionBlock(q, i, qid) {
   const s = examRuntime;
   const wrap = el("div", { class: "exam-question" });
@@ -2808,10 +3280,7 @@ function buildQuestionBlock(q, i, qid) {
   if (q.imageUrl) wrap.appendChild(el("img", { class: "q-image", src: q.imageUrl, alt: "" }));
 
   const answers = { ...(s.answers[qid] || {}) };
-  wrap.appendChild(buildQuestionInputs(q, answers, qid, () => {
-    updateProgress();
-  }));
-
+  wrap.appendChild(buildQuestionInputs(q, answers, qid, () => updateProgress()));
   return wrap;
 }
 
@@ -2822,7 +3291,7 @@ function buildQuestionHeader(q, index) {
   num.appendChild(el("span", { class: "q-number-badge", text: String(index + 1) }));
   num.appendChild(el("span", { text: `/ ${s.orderedIds.length}` }));
   header.appendChild(num);
-  header.appendChild(el("span", { class: "q-score", text: `${q.score || 1} ${t("common.points")}` }));
+  header.appendChild(el("span", { class: "q-score", text: `${q.score || 1} نقطة` }));
   return header;
 }
 
@@ -2872,7 +3341,7 @@ function buildQuestionInputs(q, answers, qid, onChange) {
     if (q.type === "tf_just") frag.appendChild(buildJustification(q, answers, qid, onChange));
   } else if (q.type === "complete") {
     const input = el("input", { class: "q-complete-input", type: "text" });
-    input.placeholder = currentLang === "ar" ? "اكتب إجابتك…" : "Type your answer…";
+    input.placeholder = "اكتب إجابتك…";
     input.value = answers.textValue || "";
     input.addEventListener("input", debounce(() => {
       answers.textValue = input.value;
@@ -2882,7 +3351,7 @@ function buildQuestionInputs(q, answers, qid, onChange) {
     frag.appendChild(input);
   } else if (q.type === "essay") {
     const ta = el("textarea", { class: "q-essay-textarea" });
-    ta.placeholder = currentLang === "ar" ? "اكتب إجابتك…" : "Write your answer…";
+    ta.placeholder = "اكتب إجابتك…";
     ta.value = answers.essayText || "";
     ta.addEventListener("input", debounce(() => {
       answers.essayText = ta.value;
@@ -2899,10 +3368,11 @@ function buildJustification(q, answers, qid, onChange) {
   const box = el("div", { class: "q-justification" });
   const label = el("div", { class: "q-justification-label" });
   label.appendChild(svgIcon("check-square", 14));
-  label.appendChild(document.createTextNode(currentLang === "ar" ? "التبرير (تصحيح يدوي)" : "Justification (manual grading)"));
+  label.appendChild(document.createTextNode("التبرير (تصحيح يدوي)"));
   box.appendChild(label);
 
   const ta = el("textarea", { class: "q-justification-textarea" });
+  ta.placeholder = "اكتب تبريرك…";
   ta.value = answers.justification || "";
   ta.addEventListener("input", debounce(() => {
     answers.justification = ta.value;
@@ -2940,7 +3410,6 @@ function updateProgress() {
   if (text) text.textContent = pct + "%";
 }
 
-/* ---- Timer ---- */
 function startTimer() {
   const s = examRuntime;
   const elVal = $("[data-timer-value]");
@@ -2967,7 +3436,6 @@ function startTimer() {
   s.timerInterval = setInterval(tick, 1000);
 }
 
-/* ---- Autosave ---- */
 function startAutosave() {
   const s = examRuntime;
   s.autosaveInterval = setInterval(async () => {
@@ -2983,7 +3451,6 @@ function startAutosave() {
   }, 5000);
 }
 
-/* ---- Heartbeat ---- */
 function startHeartbeat() {
   const s = examRuntime;
   s.heartbeatInterval = setInterval(async () => {
@@ -2996,21 +3463,23 @@ function startHeartbeat() {
   }, 15000);
 }
 
-/* ---- Anti-cheat ---- */
+/* ============================================================
+   ANTI-CHEAT (with 5-second auto-submit)
+   ============================================================ */
 function startAnticheat() {
   const s = examRuntime;
   if (!s) return;
 
   const events = s.attempt.anticheatEvents = s.attempt.anticheatEvents || [];
-  const banned = ["c", "v", "x", "a", "s", "u", "f", "j"];
 
   let lastLog = {};
-  function logEvent(type) {
+  function logEvent(type, meta = null) {
     if (s.submitted) return;
     const now = Date.now();
     if (lastLog[type] && now - lastLog[type] < 1000) return;
     lastLog[type] = now;
-    events.push({ type, at: now });
+    const evt = { type, at: now, ...(meta || {}) };
+    events.push(evt);
     if (events.length > 200) events.shift();
     updateDoc(doc(db, "attempts", s.attempt.id), { anticheatEvents: events }).catch(() => {});
   }
@@ -3024,8 +3493,11 @@ function startAnticheat() {
     $("[data-security-ok]").onclick = () => { modal.hidden = true; };
   }
 
+  // Prevent copy/cut outside inputs
   document.addEventListener("copy", (e) => {
     if (!s.submitted && !s.preview) {
+      const t2 = e.target;
+      if (t2 && (t2.tagName === "INPUT" || t2.tagName === "TEXTAREA")) return;
       e.preventDefault();
       try { e.clipboardData.setData("text/plain", ""); } catch {}
       logEvent("copy_attempt");
@@ -3034,67 +3506,72 @@ function startAnticheat() {
 
   document.addEventListener("cut", (e) => {
     if (!s.submitted && !s.preview) {
+      const t2 = e.target;
+      if (t2 && (t2.tagName === "INPUT" || t2.tagName === "TEXTAREA")) return;
       e.preventDefault();
       logEvent("cut_attempt");
     }
   }, true);
 
-  document.addEventListener("paste", (e) => {
-    if (!s.submitted && !s.preview) {
-      const target = e.target;
-      const allowed = target && (
-        target.classList.contains("q-justification-textarea") ||
-        target.classList.contains("q-essay-textarea") ||
-        target.classList.contains("q-complete-input")
-      );
-      if (!allowed) {
-        e.preventDefault();
-        logEvent("paste_attempt");
-      }
-    }
-  }, true);
-
   document.addEventListener("contextmenu", (e) => {
     if (!s.submitted && !s.preview) {
+      const t2 = e.target;
+      if (t2 && (t2.tagName === "INPUT" || t2.tagName === "TEXTAREA")) return;
       e.preventDefault();
       logEvent("context_menu");
     }
   }, true);
 
+  // Prevent Ctrl+C/A/X/S/P/U and F12
   document.addEventListener("keydown", (e) => {
     if (s.submitted || s.preview) return;
     const ctrl = e.ctrlKey || e.metaKey;
-    const key = e.key.toLowerCase();
-    if (ctrl && banned.includes(key)) {
+    const key = (e.key || "").toLowerCase();
+    const t2 = e.target;
+    const isInput = t2 && (t2.tagName === "INPUT" || t2.tagName === "TEXTAREA");
+
+    if (ctrl && ["c", "x", "a"].includes(key) && isInput) return;
+    if (ctrl && ["c", "x", "a", "s", "p", "u"].includes(key)) {
       e.preventDefault();
       e.stopPropagation();
       logEvent("shortcut_" + key);
       return false;
     }
-    if (ctrl && e.shiftKey && ["i", "j", "c"].includes(key)) {
+    if (key === "f12" || (ctrl && e.shiftKey && ["i", "j", "c"].includes(key))) {
       e.preventDefault();
-      logEvent("devtools_shortcut");
-      return false;
-    }
-    if (key === "f12") {
-      e.preventDefault();
-      logEvent("devtools_f12");
+      logEvent("devtools_attempt");
       return false;
     }
   }, true);
 
+  // ===== Auto-submit after 5 seconds of being hidden =====
   document.addEventListener("visibilitychange", () => {
+    if (s.submitted || s.preview) return;
+
     if (document.hidden) {
+      s.hiddenAt = Date.now();
       logEvent("tab_hidden");
       securityAlert("security.tabTitle", "security.tabHidden");
+
+      if (s.hiddenTimer) clearTimeout(s.hiddenTimer);
+      s.hiddenTimer = setTimeout(async () => {
+        if (s.submitted) return;
+        const away = Date.now() - s.hiddenAt;
+        logEvent("auto_submit_away", { duration: away });
+        toast(t("exam.leftPage"), "warning");
+        await performSubmit("auto", "left_page");
+      }, 5000);
     } else {
-      logEvent("tab_visible");
+      const away = Date.now() - s.hiddenAt;
+      logEvent("tab_visible", { awayFor: away });
+      if (s.hiddenTimer) {
+        clearTimeout(s.hiddenTimer);
+        s.hiddenTimer = null;
+      }
     }
   });
 
-  window.addEventListener("blur", () => logEvent("window_blur"));
-  window.addEventListener("focus", () => logEvent("window_focus"));
-
+  // Fullscreen exit
   document.addEventListener("fullscreenchange", () => {
     if (!document.fullscreenElement && s.exam.requireFullscreen && !s.preview) {
       logEvent("fullscreen_exit");
@@ -3102,19 +3579,19 @@ function startAnticheat() {
     }
   });
 
+  // Network
   window.addEventListener("offline", () => {
     logEvent("offline");
     const b = $("[data-offline-banner]"); if (b) b.hidden = false;
     const i = $("[data-connection-indicator]"); if (i) i.classList.add("is-offline");
   });
-
   window.addEventListener("online", () => {
     logEvent("online");
     const b = $("[data-offline-banner]"); if (b) b.hidden = true;
     const i = $("[data-connection-indicator]"); if (i) i.classList.remove("is-offline");
   });
 
-  // DevTools detection via viewport diff
+  // DevTools detection
   setInterval(() => {
     if (s.submitted) return;
     const wd = window.outerWidth - window.innerWidth;
@@ -3122,13 +3599,11 @@ function startAnticheat() {
     if (wd > 160 || hd > 160) logEvent("devtools_open");
   }, 5000);
 
-  // Moving watermark
   startMovingWatermark();
 
-  // Disable selection
-  const h = $("[data-questions-host-scroll]");
-  const h2 = $("[data-single-question-host]");
-  [h, h2].forEach((x) => {
+  // Disable text selection on questions
+  [document.querySelector("[data-questions-host-scroll]"),
+   document.querySelector("[data-single-question-host]")].forEach((x) => {
     if (x) {
       x.style.userSelect = "none";
       x.style.webkitUserSelect = "none";
@@ -3141,18 +3616,9 @@ function startMovingWatermark() {
   if (!wm || wm.dataset.moving) return;
   wm.dataset.moving = "1";
 
-  const s = examRuntime;
-  if (!s) return;
-
-  const t1 = wm.querySelector("[data-watermark-teacher]");
-  const t2 = wm.querySelector("span:last-child");
-  if (t1) t1.textContent = `${s.attempt.studentName || ""} · QeyasQuiz`;
-  if (t2) t2.textContent = `QeyasQuiz · ${new Date().toLocaleDateString()}`;
-
   let lx = 0, ly = 0;
   setInterval(() => {
-    let x, y;
-    let tries = 0;
+    let x, y, tries = 0;
     do {
       x = Math.random() * 100 - 50;
       y = Math.random() * 100 - 50;
@@ -3163,30 +3629,24 @@ function startMovingWatermark() {
   }, 3000);
 }
 
-/* ---- Confirm Submit ---- */
+/* ============================================================
+   SUBMIT
+   ============================================================ */
 function confirmSubmit() {
   const s = examRuntime;
   if (!s) return;
-
   const total = s.orderedIds.length;
   const answered = s.orderedIds.filter((qid) => isAnswered(s.answers[qid], s.byId[qid])).length;
   const unanswered = total - answered;
 
   if (unanswered > 0) {
     const firstUnansweredIdx = s.orderedIds.findIndex((qid) => !isAnswered(s.answers[qid], s.byId[qid]));
-
     openModal({
       title: `${t("exam.confirm.unanswered")} — ${unanswered}`,
-      body: currentLang === "ar"
-        ? `عندك ${unanswered} سؤال مش مجاوب عليه.`
-        : `You have ${unanswered} unanswered question${unanswered > 1 ? "s" : ""}.`,
+      body: `عندك ${unanswered} سؤال مش مجاوب عليه.`,
       actions: [
         { label: t("action.cancel"), class: "btn-ghost" },
-        {
-          label: t("exam.confirm.submitAnyway"),
-          class: "btn-outline",
-          onClick: () => actuallySubmit()
-        },
+        { label: t("exam.confirm.submitAnyway"), class: "btn-outline", onClick: () => actuallySubmit() },
         {
           label: t("exam.confirm.goToFirst"),
           class: "btn-primary",
@@ -3235,13 +3695,13 @@ async function performSubmit(kind = "manual", reason = null) {
   if (!s || s.submitted) return;
   s.submitted = true;
 
+  if (s.hiddenTimer) clearTimeout(s.hiddenTimer);
   clearInterval(s.timerInterval);
   clearInterval(s.autosaveInterval);
   clearInterval(s.heartbeatInterval);
   if (s.watcherUnsub) { try { s.watcherUnsub(); } catch {} s.watcherUnsub = null; }
 
   try {
-    // Students DO NOT compute scores — teacher does.
     await updateDoc(doc(db, "attempts", s.attempt.id), {
       answers: s.answers,
       status: "submitted",
@@ -3250,13 +3710,38 @@ async function performSubmit(kind = "manual", reason = null) {
       submittedAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
+
     sessionStorage.setItem("qeyasquiz.lastAttempt", s.attempt.id);
+    localStorage.setItem("qeyasquiz.lastAttempt", s.attempt.id);
     localStorage.removeItem(EXAM_STATE_KEY(s.exam.id));
-    navigate("/result");
+
+    // Show result code modal
+    const modal = $("[data-result-code-modal]");
+    const display = $("[data-result-code-display]");
+    if (modal && display) {
+      display.textContent = s.attempt.resultCode || "—";
+      modal.hidden = false;
+      const copyBtn = $("[data-copy-result-code]");
+      if (copyBtn) {
+        copyBtn.onclick = () => {
+          navigator.clipboard.writeText(s.attempt.resultCode || "");
+          toast(t("common.copied"), "success");
+        };
+      }
+      const viewBtn = $("[data-view-result]");
+      if (viewBtn) {
+        viewBtn.onclick = () => {
+          modal.hidden = true;
+          navigate("/result");
+        };
+      }
+    } else {
+      navigate("/result");
+    }
   } catch (err) {
     console.error(err);
     s.submitted = false;
-    toast(currentLang === "ar" ? "فشل التسليم. حاول مرة أخرى." : "Submission failed. Please retry.", "error");
+    toast("فشل التسليم. حاول مرة أخرى.", "error");
   }
 }
 
@@ -3267,10 +3752,10 @@ function startExamRealtimeWatcher(examId, initialUpdatedAtMs) {
   const unsub = onSnapshot(doc(db, "exams", examId), (snap) => {
     if (!snap.exists()) return;
     const newExam = { id: snap.id, ...snap.data() };
-    const newUpdatedMs = newExam.updatedAt?.toMillis?.() || (newExam.updatedAt?.seconds * 1000) || 0;
+    const newMs = newExam.updatedAt?.toMillis?.() || (newExam.updatedAt?.seconds * 1000) || 0;
     const s = examRuntime;
     if (!s || s.submitted || s.preview) return;
-    if (newUpdatedMs > initialUpdatedAtMs) {
+    if (newMs > initialUpdatedAtMs) {
       const structural = JSON.stringify(newExam.forms || newExam.questions || []) !==
                         JSON.stringify(s.exam.forms || s.exam.questions || []);
       if (structural) {
@@ -3298,28 +3783,29 @@ async function applyExamUpdate() {
   s.pendingExam = null;
   s.exam = newExam;
 
-  // Recompute current form questions
-  const forms = newExam.forms && newExam.forms.length ? newExam.forms : [{ id: "A", name: "Form A", questions: newExam.questions || [] }];
+  const forms = newExam.forms && newExam.forms.length
+    ? newExam.forms
+    : [{ id: "A", name: "النموذج أ", questions: newExam.questions || [] }];
   const form = forms.find((f) => f.id === s.attempt.formId) || forms[0];
   const newQuestions = form.questions || [];
   const byId = {};
   newQuestions.forEach((q) => (byId[q.id] = q));
 
-  const preservedAnswers = { ...s.answers };
-  const visible = {};
+  const preserved = { ...s.answers };
   const existingIds = new Set(newQuestions.map((q) => q.id));
   const kept = (s.orderedIds || []).filter((id) => existingIds.has(id));
   const newIds = newQuestions.map((q) => q.id).filter((id) => !kept.includes(id));
   s.orderedIds = [...kept, ...newIds];
 
-  s.orderedIds.forEach((qid) => { if (preservedAnswers[qid]) visible[qid] = preservedAnswers[qid]; });
+  const visible = {};
+  s.orderedIds.forEach((qid) => { if (preserved[qid]) visible[qid] = preserved[qid]; });
   s.answers = visible;
   s.questions = newQuestions;
   s.byId = byId;
   if (s.index >= s.orderedIds.length) s.index = Math.max(0, s.orderedIds.length - 1);
 
-  $("[data-exam-title]").textContent = newExam.title || "Exam";
-  $("[data-exam-meta]").textContent = `${subjectLabel(newExam.subject)} · ${newExam.grade || ""}`;
+  $("[data-exam-title]").textContent = newExam.title || "امتحان";
+  $("[data-exam-meta]").textContent = `${subjectLabel(newExam.subject)} · ${gradeLabel(newExam.grade)}`;
 
   if (s.displayMode === "single") {
     renderSingleNavList();
@@ -3337,7 +3823,7 @@ async function applyExamUpdate() {
     });
   } catch {}
   s.dirty = false;
-  toast(currentLang === "ar" ? "تم تحديث الامتحان" : "Exam updated", "info");
+  toast("تم تحديث الامتحان", "info");
 }
 
 /* ============================================================
@@ -3346,14 +3832,24 @@ async function applyExamUpdate() {
 async function renderResult() {
   const loading = $("[data-result-loading]");
   const main = $("[data-result-main]");
-  const attemptId = sessionStorage.getItem("qeyasquiz.lastAttempt");
+  const lookup = $("[data-result-lookup]");
+
+  loading.hidden = true;
+  main.hidden = true;
+  if (lookup) lookup.hidden = true;
+
+  const attemptId = sessionStorage.getItem("qeyasquiz.lastAttempt")
+    || localStorage.getItem("qeyasquiz.lastAttempt");
 
   if (!attemptId) {
-    loading.hidden = true;
-    main.hidden = false;
-    $("[data-result-exam-title]").textContent = currentLang === "ar" ? "لا يوجد امتحان" : "No exam";
+    if (lookup) {
+      lookup.hidden = false;
+      bindResultLookup();
+    }
     return;
   }
+
+  loading.hidden = false;
 
   let attempt, exam;
   try {
@@ -3363,8 +3859,11 @@ async function renderResult() {
     exam = await getExam(attempt.examId);
   } catch {
     loading.hidden = true;
-    main.hidden = false;
-    $("[data-result-exam-title]").textContent = t("common.notFound");
+    main.hidden = true;
+    if (lookup) {
+      lookup.hidden = false;
+      bindResultLookup();
+    }
     return;
   }
 
@@ -3373,15 +3872,14 @@ async function renderResult() {
 
   const resultPublished = exam?.resultPublishedAt != null;
   $("[data-result-status]").textContent = t("status." + (attempt.status || "submitted"));
-  $("[data-result-exam-title]").textContent = exam?.title || "Exam";
-  $("[data-result-meta]").textContent = `${subjectLabel(exam?.subject)} · ${exam?.grade || ""} · ${attempt.studentName || ""}`;
+  $("[data-result-exam-title]").textContent = exam?.title || "امتحان";
+  $("[data-result-meta]").textContent = `${subjectLabel(exam?.subject)} · ${gradeLabel(exam?.grade)} · ${attempt.studentName || ""}`;
 
   const scoreBlock = $("[data-score-block]");
   const waitingBlock = $("[data-waiting-block]");
   const feedbackBlock = $("[data-feedback-block]");
   const reviewHead = $("[data-review-head]");
   const reviewHost = $("[data-result-review]");
-
   const totalPossible = attempt.totalPossible || (exam?.totalScore || 0);
 
   if (resultPublished && attempt.score != null) {
@@ -3397,6 +3895,22 @@ async function renderResult() {
   } else {
     scoreBlock.hidden = true;
     waitingBlock.hidden = false;
+  }
+
+  // Auto-refresh if published but not yet graded
+  if (resultPublished && attempt.score == null) {
+    const container = $(".result-container");
+    if (container && !container.querySelector("[data-grading-notice]")) {
+      const notice = el("div", {
+        class: "card mt-4 text-center",
+        style: "padding:var(--sp-5)",
+        "data-grading-notice": "1"
+      }, [
+        el("p", { class: "text-muted", text: t("result.grading") })
+      ]);
+      container.appendChild(notice);
+    }
+    setTimeout(() => renderResult(), 5000);
   }
 
   if (resultPublished && exam) {
@@ -3432,7 +3946,6 @@ async function renderResult() {
 
       const wrap = el("div", { class: "review-answers" });
 
-      // Student answer
       let studentText = "—";
       if (q.type === "mcq" || q.type === "mcq_just") studentText = q.options?.[a.selectedIndex] || "—";
       else if (q.type === "tf" || q.type === "tf_just") studentText = a.boolValue === true ? t("question.true") : a.boolValue === false ? t("question.false") : "—";
@@ -3440,11 +3953,10 @@ async function renderResult() {
       else if (q.type === "essay") studentText = a.essayText || "—";
 
       wrap.appendChild(el("div", { class: "review-answer is-wrong" }, [
-        el("strong", { text: currentLang === "ar" ? "إجابتك" : "Your answer" }),
+        el("strong", { text: t("result.yourAnswer") }),
         el("div", { text: studentText, style: "white-space:pre-wrap" })
       ]));
 
-      // Correct answer
       if (q.type !== "essay") {
         let correctText = "—";
         if (q.type === "mcq" || q.type === "mcq_just") correctText = q.options?.[key.correctIndex] || "—";
@@ -3452,22 +3964,29 @@ async function renderResult() {
         else if (q.type === "complete") correctText = key.correctText || "—";
 
         wrap.appendChild(el("div", { class: "review-answer is-correct" }, [
-          el("strong", { text: currentLang === "ar" ? "الإجابة الصحيحة" : "Correct answer" }),
+          el("strong", { text: t("result.correctAnswer") }),
           el("div", { text: correctText, style: "white-space:pre-wrap" })
         ]));
       }
 
       if (q.type === "essay" && key.modelAnswer) {
         wrap.appendChild(el("div", { class: "review-answer is-correct" }, [
-          el("strong", { text: currentLang === "ar" ? "الإجابة النموذجية" : "Model answer" }),
+          el("strong", { text: t("result.modelAnswer") }),
           el("div", { text: key.modelAnswer, style: "white-space:pre-wrap" })
         ]));
       }
 
       if (a.justification) {
         wrap.appendChild(el("div", { class: "review-answer" }, [
-          el("strong", { text: currentLang === "ar" ? "تبريرك" : "Your justification" }),
+          el("strong", { text: t("result.yourJustification") }),
           el("div", { text: a.justification, style: "white-space:pre-wrap" })
+        ]));
+      }
+
+      if ((q.type === "mcq_just" || q.type === "tf_just") && key.justificationModelAnswer) {
+        wrap.appendChild(el("div", { class: "review-answer is-correct" }, [
+          el("strong", { text: t("result.modelJustification") }),
+          el("div", { text: key.justificationModelAnswer, style: "white-space:pre-wrap" })
         ]));
       }
 
@@ -3475,14 +3994,82 @@ async function renderResult() {
       reviewHost.appendChild(card);
     });
   }
+
+  const anotherBtn = $("[data-result-new-lookup]");
+  if (anotherBtn && !anotherBtn.dataset.bound) {
+    anotherBtn.dataset.bound = "1";
+    anotherBtn.addEventListener("click", () => {
+      sessionStorage.removeItem("qeyasquiz.lastAttempt");
+      localStorage.removeItem("qeyasquiz.lastAttempt");
+      main.hidden = true;
+      if (lookup) {
+        lookup.hidden = false;
+        bindResultLookup();
+      }
+    });
+  }
+}
+
+function bindResultLookup() {
+  const input = $("[data-result-code-input]");
+  const btn = $("[data-result-lookup-btn]");
+  const err = $("[data-result-lookup-error]");
+
+  if (!input || !btn) return;
+  if (btn.dataset.bound) return;
+  btn.dataset.bound = "1";
+
+  input.addEventListener("input", (e) => {
+    let v = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (v.length > 4) v = v.slice(0, 4) + "-" + v.slice(4, 8);
+    e.target.value = v;
+  });
+
+  const check = async () => {
+    const code = input.value.trim().toUpperCase();
+    if (code.length !== 9) {
+      err.hidden = false;
+      err.textContent = t("result.lookup.codeLength");
+      return;
+    }
+
+    btn.classList.add("is-loading");
+    try {
+      const q = query(collection(db, "attempts"), where("resultCode", "==", code), limit(1));
+      const snap = await getDocs(q);
+
+      if (snap.empty) {
+        err.hidden = false;
+        err.textContent = t("result.lookup.invalidCode");
+        btn.classList.remove("is-loading");
+        return;
+      }
+
+      const attemptDoc = snap.docs[0];
+      localStorage.setItem("qeyasquiz.lastAttempt", attemptDoc.id);
+      sessionStorage.setItem("qeyasquiz.lastAttempt", attemptDoc.id);
+      btn.classList.remove("is-loading");
+      await renderResult();
+    } catch (e) {
+      console.error(e);
+      err.hidden = false;
+      err.textContent = t("result.lookup.error");
+      btn.classList.remove("is-loading");
+    }
+  };
+
+  btn.addEventListener("click", check);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") check();
+  });
 }
 
 /* ============================================================
-   ROUTE REGISTRATION
+   ROUTES
    ============================================================ */
-onRoute("/", () => { initLanding(); });
-onRoute("/login", () => { initLogin(); });
-onRoute("/setup", () => { initSetup(); });
+onRoute("/", () => initLanding());
+onRoute("/login", () => initLogin());
+onRoute("/setup", () => initSetup());
 onRoute("/app/dashboard", async () => { await renderDashboard(); });
 onRoute("/app/exams", async () => { await renderMyExams(); });
 onRoute("/app/builder", async (p) => { await renderBuilder(p); });
@@ -3500,36 +4087,29 @@ onRoute("/result", async () => { await renderResult(); });
    ============================================================ */
 document.addEventListener("click", (e) => {
   if (e.target.closest("[data-theme-toggle]")) { toggleTheme(); return; }
-
-  const langBtn = e.target.closest("[data-lang]");
-  if (langBtn) { setLang(langBtn.dataset.lang); return; }
-
   if (e.target.closest("[data-signout]")) { signOutUser(); return; }
-
   if (e.target.closest("[data-create-exam]")) { navigate("/app/builder"); return; }
+  if (e.target.closest("[data-back]")) { history.back(); return; }
 
-  if (e.target.closest("[data-back]")) {
-    history.back();
-    return;
-  }
-
-  const sidebarToggle = e.target.closest("[data-sidebar-toggle]");
-  if (sidebarToggle) {
+  if (e.target.closest("[data-sidebar-toggle]")) {
     const sidebar = $("[data-sidebar]");
     const scrim = $("[data-sidebar-scrim]");
-    sidebar.classList.add("is-open");
-    scrim.classList.add("is-open");
+    if (sidebar) sidebar.classList.add("is-open");
+    if (scrim) scrim.classList.add("is-open");
     return;
   }
 
   if (e.target.closest("[data-sidebar-scrim]")) {
-    $("[data-sidebar]").classList.remove("is-open");
-    $("[data-sidebar-scrim]").classList.remove("is-open");
+    const sidebar = $("[data-sidebar]");
+    const scrim = $("[data-sidebar-scrim]");
+    if (sidebar) sidebar.classList.remove("is-open");
+    if (scrim) scrim.classList.remove("is-open");
     return;
   }
 });
 
 window.addEventListener("hashchange", handleRoute);
+
 window.addEventListener("online", () => {
   const b = $("[data-offline-banner]");
   if (b) b.hidden = true;
@@ -3543,7 +4123,11 @@ window.addEventListener("offline", () => {
    INIT
    ============================================================ */
 (function init() {
+  document.documentElement.lang = "ar";
+  document.documentElement.dir = "rtl";
   setTheme(currentTheme);
-  setLang(currentLang);
+  applyI18n();
+  initThreeBackground();
+  initAntiCopy();
   handleRoute();
 })();
