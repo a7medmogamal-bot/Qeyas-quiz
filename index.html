@@ -1,21 +1,23 @@
 <!DOCTYPE html>
-<html lang="en" dir="ltr" data-theme="light">
+<html lang="ar" dir="rtl" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="description" content="QeyasQuiz — Smart Exams. Better Assessment.">
+<meta name="description" content="QeyasQuiz — امتحانات ذكية. تقييم أفضل.">
 <meta name="theme-color" content="#3f68f5">
-<title>QeyasQuiz — Smart Exams. Better Assessment.</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%233f68f5'/%3E%3Cpath d='M40.5 46l4 4 7-7' stroke='%23fff' stroke-width='4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<title>QeyasQuiz — امتحانات ذكية. تقييم أفضل.</title>
+<link rel="icon" type="image/png" href="https://i.ibb.co/39cB8Cbv/file-00000000dac881f48b765e030a2b4313.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
 <!-- ============================================================
-     SVG ICON SYMBOLS
+     SVG ICONS
      ============================================================ -->
 <svg xmlns="http://www.w3.org/2000/svg" style="position:absolute;width:0;height:0;overflow:hidden" aria-hidden="true">
 <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></symbol>
@@ -84,43 +86,51 @@
 <symbol id="i-award" viewBox="0 0 24 24"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></symbol>
 <symbol id="i-trending-up" viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></symbol>
 <symbol id="i-inbox" viewBox="0 0 24 24"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
+<symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
+<symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></symbol>
+<symbol id="i-rotate" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></symbol>
+<symbol id="i-anchor" viewBox="0 0 24 24"><circle cx="12" cy="5" r="3"/><line x1="12" y1="22" x2="12" y2="8"/><path d="M5 12H2a10 10 0 0 0 20 0h-3"/></symbol>
+<symbol id="i-tag" viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></symbol>
 </svg>
 
 <!-- ============================================================
-     HOSTS
+     BACKGROUND CANVAS (Three.js)
+     ============================================================ -->
+<canvas id="bgCanvas" class="bg-canvas" aria-hidden="true"></canvas>
+
+<!-- ============================================================
+     HOSTS (Toast + Modal)
      ============================================================ -->
 <div class="toast-stack" data-toast-stack aria-live="polite"></div>
 <div class="modal-host" data-modal-host></div>
 
 <!-- ============================================================
-     LANDING PAGE
+     ============================================================
+     LANDING PAGE — الصفحة الرئيسية
+     ============================================================
      ============================================================ -->
 <section class="page page-landing" data-page="landing">
 
   <header class="landing-nav">
     <div class="container nav-inner">
       <a href="#/" class="brand">
-        <span class="brand-mark"></span>
+        <img class="brand-logo" src="https://i.ibb.co/39cB8Cbv/file-00000000dac881f48b765e030a2b4313.png" alt="QeyasQuiz" draggable="false">
         <span class="brand-name">QeyasQuiz</span>
       </a>
 
-      <nav class="nav-links" aria-label="Primary">
-        <a href="#features" data-i18n="nav.features">Features</a>
-        <a href="#how" data-i18n="nav.how">How it works</a>
-        <a href="#security" data-i18n="nav.security">Security</a>
+      <nav class="nav-links" aria-label="القائمة الرئيسية">
+        <a href="#features" data-i18n="nav.features">المميزات</a>
+        <a href="#how" data-i18n="nav.how">كيف يعمل</a>
+        <a href="#security" data-i18n="nav.security">الأمان</a>
       </nav>
 
       <div class="nav-actions">
-        <div class="lang-switch" role="group" aria-label="Language">
-          <button type="button" class="lang-btn is-active" data-lang="en">EN</button>
-          <button type="button" class="lang-btn" data-lang="ar">ع</button>
-        </div>
-        <button type="button" class="icon-btn" data-theme-toggle aria-label="Toggle theme">
+        <button type="button" class="icon-btn" data-theme-toggle aria-label="تبديل المظهر">
           <svg class="icon i-sun" width="18" height="18"><use href="#i-sun"></use></svg>
           <svg class="icon i-moon" width="18" height="18"><use href="#i-moon"></use></svg>
         </button>
-        <a href="#/login" class="btn btn-ghost" data-i18n="nav.signin">Sign in</a>
-        <a href="#/login" class="btn btn-primary" data-i18n="nav.cta">Get Started</a>
+        <a href="#/login" class="btn btn-ghost" data-i18n="nav.signin">تسجيل الدخول</a>
+        <a href="#/login" class="btn btn-primary" data-i18n="nav.cta">ابدأ الآن</a>
       </div>
     </div>
   </header>
@@ -129,38 +139,41 @@
     <section class="hero">
       <div class="container hero-inner">
         <div class="hero-copy">
-          <span class="hero-eyebrow" data-i18n="hero.eyebrow">EdTech Platform</span>
-          <h1 class="hero-title" data-i18n="hero.title">Create. Publish. Assess.</h1>
-          <p class="hero-subtitle" data-i18n="hero.subtitle">QeyasQuiz helps teachers create exams, deliver them securely, and grade with precision — all in one place.</p>
+          <span class="hero-eyebrow" data-i18n="hero.eyebrow">منصة تعليمية</span>
+          <h1 class="hero-title" data-i18n="hero.title">أنشئ. انشر. قيّم.</h1>
+          <p class="hero-subtitle" data-i18n="hero.subtitle">QeyasQuiz تساعد المعلمين على إنشاء الامتحانات وتسليمها بأمان وتصحيحها بدقة — كل ذلك في مكان واحد.</p>
+
           <div class="hero-actions">
-            <a href="#/login" class="btn btn-primary btn-lg" data-i18n="hero.cta">Create Your First Exam</a>
+            <a href="#/login" class="btn btn-primary btn-lg" data-i18n="hero.cta">أنشئ أول امتحان</a>
             <a href="#/login" class="btn btn-outline btn-lg">
               <svg class="icon" width="18" height="18"><use href="#i-google"></use></svg>
-              <span data-i18n="hero.secondary">Sign in with Google</span>
+              <span data-i18n="hero.secondary">الدخول بحساب Google</span>
             </a>
           </div>
+
           <ul class="hero-points">
-            <li><svg class="icon" width="18" height="18"><use href="#i-check"></use></svg><span data-i18n="hero.point1">Multiple exam forms</span></li>
-            <li><svg class="icon" width="18" height="18"><use href="#i-check"></use></svg><span data-i18n="hero.point2">Automatic grading</span></li>
-            <li><svg class="icon" width="18" height="18"><use href="#i-check"></use></svg><span data-i18n="hero.point3">Anti-cheat monitoring</span></li>
+            <li><svg class="icon" width="18" height="18"><use href="#i-check"></use></svg><span data-i18n="hero.point1">نماذج امتحان متعددة</span></li>
+            <li><svg class="icon" width="18" height="18"><use href="#i-check"></use></svg><span data-i18n="hero.point2">تصحيح تلقائي</span></li>
+            <li><svg class="icon" width="18" height="18"><use href="#i-check"></use></svg><span data-i18n="hero.point3">مراقبة ضد الغش</span></li>
           </ul>
         </div>
+
         <div class="hero-visual" aria-hidden="true">
           <div class="hero-preview card-brutal tint-1 offset-lg">
             <div class="hero-preview-head">
-              <span class="badge-brutal is-active">Live</span>
+              <span class="badge-brutal is-active" data-i18n="hero.badge">مباشر</span>
               <span class="hero-preview-time">01:24:32</span>
             </div>
-            <p class="hero-preview-progress">Question 5 of 20</p>
-            <p class="hero-preview-question">Which of the following is a prime number?</p>
+            <p class="hero-preview-progress" data-i18n="hero.progress">سؤال 5 من 20</p>
+            <p class="hero-preview-question" data-i18n="hero.sampleQ">أي من الأعداد الآتية عدد أولي؟</p>
             <div class="hero-preview-options">
-              <div class="hero-option">A. 21</div>
-              <div class="hero-option is-selected">B. 17</div>
-              <div class="hero-option">C. 27</div>
-              <div class="hero-option">D. 33</div>
+              <div class="hero-option">أ. 21</div>
+              <div class="hero-option is-selected">ب. 17</div>
+              <div class="hero-option">ج. 27</div>
+              <div class="hero-option">د. 33</div>
             </div>
             <div class="hero-preview-foot">
-              <span>Progress 25%</span>
+              <span data-i18n="hero.progressLabel">التقدم 25%</span>
               <span class="hero-preview-bar"><span></span></span>
             </div>
           </div>
@@ -171,39 +184,45 @@
     <section id="features" class="section">
       <div class="container">
         <header class="section-head">
-          <h2 data-i18n="features.title">Built for serious assessment</h2>
-          <p data-i18n="features.subtitle">Every tool a teacher needs, nothing they don't.</p>
+          <h2 data-i18n="features.title">مبنية للتقييم الجاد</h2>
+          <p data-i18n="features.subtitle">كل أداة يحتاجها المعلم، بدون زيادات.</p>
         </header>
+
         <div class="features-grid">
           <article class="card-brutal tint-1">
             <div class="card-icon"><svg class="icon" width="22" height="22"><use href="#i-clipboard"></use></svg></div>
-            <h3 class="card-title" data-i18n="features.f1.title">Exam Builder</h3>
-            <p class="card-subtitle" data-i18n="features.f1.text">Six question types, drag-and-drop ordering, and automatic total score calculation.</p>
+            <h3 class="card-title" data-i18n="features.f1.title">منشئ الامتحانات</h3>
+            <p class="card-subtitle" data-i18n="features.f1.text">ستة أنواع أسئلة، ترتيب بالسحب، وحساب تلقائي للدرجة الكلية.</p>
           </article>
+
           <article class="card-brutal tint-2">
             <div class="card-icon"><svg class="icon" width="22" height="22"><use href="#i-layers"></use></svg></div>
-            <h3 class="card-title" data-i18n="features.f2.title">Multiple Forms</h3>
-            <p class="card-subtitle" data-i18n="features.f2.text">Create separate forms with different questions. Students get one at random.</p>
+            <h3 class="card-title" data-i18n="features.f2.title">نماذج متعددة</h3>
+            <p class="card-subtitle" data-i18n="features.f2.text">أنشئ نماذج بأسئلة مختلفة. الطالب يحصل على نموذج عشوائي.</p>
           </article>
+
           <article class="card-brutal tint-3">
             <div class="card-icon"><svg class="icon" width="22" height="22"><use href="#i-timer"></use></svg></div>
-            <h3 class="card-title" data-i18n="features.f3.title">Server-Authoritative Timer</h3>
-            <p class="card-subtitle" data-i18n="features.f3.text">Timing is calculated from trusted server timestamps. Device clock changes have no effect.</p>
+            <h3 class="card-title" data-i18n="features.f3.title">مؤقت بوقت السيرفر</h3>
+            <p class="card-subtitle" data-i18n="features.f3.text">الوقت محسوب من توقيت السيرفر الموثوق. تغيير ساعة الجهاز لا يؤثر.</p>
           </article>
+
           <article class="card-brutal tint-4">
             <div class="card-icon"><svg class="icon" width="22" height="22"><use href="#i-shield"></use></svg></div>
-            <h3 class="card-title" data-i18n="features.f4.title">Anti-Cheat Monitoring</h3>
-            <p class="card-subtitle" data-i18n="features.f4.text">Tab switches, visibility changes and disconnects are logged for teacher review.</p>
+            <h3 class="card-title" data-i18n="features.f4.title">مراقبة ضد الغش</h3>
+            <p class="card-subtitle" data-i18n="features.f4.text">تسجيل تبديل التاب وتغيير التركيز وانقطاع الاتصال لمراجعة المعلم.</p>
           </article>
+
           <article class="card-brutal tint-5">
             <div class="card-icon"><svg class="icon" width="22" height="22"><use href="#i-check-circle"></use></svg></div>
-            <h3 class="card-title" data-i18n="features.f5.title">Automatic Grading</h3>
-            <p class="card-subtitle" data-i18n="features.f5.text">Objective questions grade instantly. Essays and justifications stay manual.</p>
+            <h3 class="card-title" data-i18n="features.f5.title">تصحيح تلقائي</h3>
+            <p class="card-subtitle" data-i18n="features.f5.text">الأسئلة الموضوعية تُصحح فورًا. المقالية والتبرير يدويًا.</p>
           </article>
+
           <article class="card-brutal tint-2">
             <div class="card-icon"><svg class="icon" width="22" height="22"><use href="#i-chart"></use></svg></div>
-            <h3 class="card-title" data-i18n="features.f6.title">Analytics</h3>
-            <p class="card-subtitle" data-i18n="features.f6.text">Average score, hardest questions, completion time and per-topic breakdown.</p>
+            <h3 class="card-title" data-i18n="features.f6.title">تحليلات</h3>
+            <p class="card-subtitle" data-i18n="features.f6.text">متوسط الدرجات، أصعب الأسئلة، وقت الإنجاز، وتحليل حسب الموضوع.</p>
           </article>
         </div>
       </div>
@@ -212,24 +231,25 @@
     <section id="how" class="section">
       <div class="container">
         <header class="section-head">
-          <h2 data-i18n="how.title">How it works</h2>
-          <p data-i18n="how.subtitle">From idea to result in three steps.</p>
+          <h2 data-i18n="how.title">كيف يعمل</h2>
+          <p data-i18n="how.subtitle">من الفكرة إلى النتيجة في ثلاث خطوات.</p>
         </header>
+
         <ol class="how-steps">
           <li class="how-step card-brutal offset-sm">
             <span class="how-step-num">01</span>
-            <h3 class="card-title" data-i18n="how.s1.title">Create</h3>
-            <p class="card-subtitle" data-i18n="how.s1.text">Build your exam with multiple forms, images, timing, and access rules.</p>
+            <h3 class="card-title" data-i18n="how.s1.title">أنشئ</h3>
+            <p class="card-subtitle" data-i18n="how.s1.text">ابنِ امتحانك بنماذج متعددة وصور وتوقيت وقواعد وصول.</p>
           </li>
           <li class="how-step card-brutal offset-sm">
             <span class="how-step-num">02</span>
-            <h3 class="card-title" data-i18n="how.s2.title">Publish</h3>
-            <p class="card-subtitle" data-i18n="how.s2.text">Share a secure link or QR code. Students open it and start instantly.</p>
+            <h3 class="card-title" data-i18n="how.s2.title">انشر</h3>
+            <p class="card-subtitle" data-i18n="how.s2.text">شارك رابطًا آمنًا أو كود QR. الطلاب يفتحون ويبدأون فورًا.</p>
           </li>
           <li class="how-step card-brutal offset-sm">
             <span class="how-step-num">03</span>
-            <h3 class="card-title" data-i18n="how.s3.title">Assess</h3>
-            <p class="card-subtitle" data-i18n="how.s3.text">Objective questions grade automatically. Review, add feedback, and publish results.</p>
+            <h3 class="card-title" data-i18n="how.s3.title">قيّم</h3>
+            <p class="card-subtitle" data-i18n="how.s3.text">الأسئلة الموضوعية تُصحح تلقائيًا. راجع، أضف ملاحظات، وانشر النتائج.</p>
           </li>
         </ol>
       </div>
@@ -238,24 +258,27 @@
     <section id="security" class="section">
       <div class="container">
         <header class="section-head">
-          <h2 data-i18n="sec.title">Secure by design</h2>
-          <p data-i18n="sec.subtitle">The frontend is never trusted. Every critical action is validated on the backend.</p>
+          <h2 data-i18n="sec.title">آمن بالتصميم</h2>
+          <p data-i18n="sec.subtitle">لا نثق أبدًا في الواجهة. كل إجراء حساس يُتحقق منه على السيرفر.</p>
         </header>
+
         <div class="features-grid">
           <article class="card-brutal offset-sm">
             <div class="card-icon"><svg class="icon" width="22" height="22"><use href="#i-lock"></use></svg></div>
-            <h3 class="card-title" data-i18n="sec.s1.title">Server Timestamps</h3>
-            <p class="card-subtitle" data-i18n="sec.s1.text">Exam timing and deadlines are enforced from trusted server time.</p>
+            <h3 class="card-title" data-i18n="sec.s1.title">توقيت السيرفر</h3>
+            <p class="card-subtitle" data-i18n="sec.s1.text">أوقات الامتحان والمواعيد النهائية مفروضة من وقت السيرفر الموثوق.</p>
           </article>
+
           <article class="card-brutal offset-sm">
             <div class="card-icon"><svg class="icon" width="22" height="22"><use href="#i-user-check"></use></svg></div>
-            <h3 class="card-title" data-i18n="sec.s2.title">Answer Key Protection</h3>
-            <p class="card-subtitle" data-i18n="sec.s2.text">Correct answers are stored in a separate collection. Students can never read them.</p>
+            <h3 class="card-title" data-i18n="sec.s2.title">حماية الإجابات</h3>
+            <p class="card-subtitle" data-i18n="sec.s2.text">الإجابات الصحيحة محفوظة في مجموعة منفصلة. الطالب لا يمكنه قراءتها أبدًا.</p>
           </article>
+
           <article class="card-brutal offset-sm">
             <div class="card-icon"><svg class="icon" width="22" height="22"><use href="#i-shield-check"></use></svg></div>
-            <h3 class="card-title" data-i18n="sec.s3.title">One Attempt Only</h3>
-            <p class="card-subtitle" data-i18n="sec.s3.text">Duplicate attempts are blocked at the database level, not in the browser.</p>
+            <h3 class="card-title" data-i18n="sec.s3.title">محاولة واحدة فقط</h3>
+            <p class="card-subtitle" data-i18n="sec.s3.text">تكرار المحاولات ممنوع على مستوى قاعدة البيانات، لا في المتصفح.</p>
           </article>
         </div>
       </div>
@@ -264,11 +287,11 @@
     <section class="section">
       <div class="container">
         <div class="cta-box">
-          <h2 data-i18n="cta.title">Start assessing smarter today</h2>
-          <p data-i18n="cta.subtitle">Free to start. No credit card. Sign in with Google and publish your first exam in minutes.</p>
+          <h2 data-i18n="cta.title">ابدأ التقييم الذكي اليوم</h2>
+          <p data-i18n="cta.subtitle">ابدأ مجانًا. بدون بطاقة. سجّل بحساب Google وانشر أول امتحان في دقائق.</p>
           <div class="cta-actions">
-            <a href="#/login" class="btn btn-primary btn-lg" data-i18n="cta.primary">Create Your First Exam</a>
-            <a href="#/login" class="btn btn-outline btn-lg" data-i18n="cta.secondary">Sign in with Google</a>
+            <a href="#/login" class="btn btn-primary btn-lg" data-i18n="cta.primary">أنشئ أول امتحان</a>
+            <a href="#/login" class="btn btn-outline btn-lg" data-i18n="cta.secondary">الدخول بحساب Google</a>
           </div>
         </div>
       </div>
@@ -278,17 +301,19 @@
   <footer class="footer">
     <div class="container footer-inner">
       <div class="brand">
-        <span class="brand-mark"></span>
+        <img class="brand-logo" src="https://i.ibb.co/39cB8Cbv/file-00000000dac881f48b765e030a2b4313.png" alt="QeyasQuiz" draggable="false">
         <span class="brand-name">QeyasQuiz</span>
       </div>
-      <nav class="footer-links" aria-label="Footer">
-        <a href="#" data-i18n="footer.about">About</a>
-        <a href="#" data-i18n="footer.privacy">Privacy</a>
-        <a href="#" data-i18n="footer.terms">Terms</a>
-        <a href="#" data-i18n="footer.contact">Contact</a>
+
+      <nav class="footer-links" aria-label="روابط التذييل">
+        <a href="#" data-i18n="footer.about">من نحن</a>
+        <a href="#" data-i18n="footer.privacy">الخصوصية</a>
+        <a href="#" data-i18n="footer.terms">الشروط</a>
+        <a href="#" data-i18n="footer.contact">اتصل بنا</a>
       </nav>
+
       <p class="footer-copy">
-        <span data-i18n="footer.tagline">Smart Exams. Better Assessment.</span>
+        <span data-i18n="footer.tagline">امتحانات ذكية. تقييم أفضل.</span>
         <span> · © <span data-year></span> QeyasQuiz</span>
       </p>
     </div>
@@ -296,16 +321,12 @@
 </section>
 
 <!-- ============================================================
-     LOGIN PAGE — with Sign in / Sign up tabs
+     LOGIN PAGE — صفحة تسجيل الدخول
      ============================================================ -->
 <section class="page page-login" data-page="login" hidden>
   <div class="auth-wrap">
     <div class="auth-toolbar">
-      <div class="lang-switch">
-        <button type="button" class="lang-btn is-active" data-lang="en">EN</button>
-        <button type="button" class="lang-btn" data-lang="ar">ع</button>
-      </div>
-      <button type="button" class="icon-btn" data-theme-toggle aria-label="Toggle theme">
+      <button type="button" class="icon-btn" data-theme-toggle aria-label="تبديل المظهر">
         <svg class="icon i-sun" width="18" height="18"><use href="#i-sun"></use></svg>
         <svg class="icon i-moon" width="18" height="18"><use href="#i-moon"></use></svg>
       </button>
@@ -313,21 +334,21 @@
 
     <main class="login-card">
       <a href="#/" class="brand">
-        <span class="brand-mark"></span>
+        <img class="brand-logo brand-logo-lg" src="https://i.ibb.co/39cB8Cbv/file-00000000dac881f48b765e030a2b4313.png" alt="QeyasQuiz" draggable="false">
         <span class="brand-name">QeyasQuiz</span>
       </a>
 
       <div class="auth-tabs" role="tablist">
         <button type="button" class="auth-tab is-active" data-auth-tab="signin" role="tab" aria-selected="true">
-          <span data-i18n="auth.signin">Sign in</span>
+          <span data-i18n="auth.signin">تسجيل الدخول</span>
         </button>
         <button type="button" class="auth-tab" data-auth-tab="signup" role="tab" aria-selected="false">
-          <span data-i18n="auth.signup">Sign up</span>
+          <span data-i18n="auth.signup">حساب جديد</span>
         </button>
       </div>
 
-      <h1 data-auth-title>Welcome back</h1>
-      <p data-auth-subtitle>Sign in to continue.</p>
+      <h1 data-auth-title data-i18n="auth.signin.title">مرحبًا بعودتك</h1>
+      <p data-auth-subtitle data-i18n="auth.signin.subtitle">سجّل الدخول للمتابعة.</p>
 
       <div class="auth-error" data-auth-error hidden>
         <svg class="icon" width="18" height="18"><use href="#i-alert"></use></svg>
@@ -336,46 +357,42 @@
 
       <button type="button" class="btn btn-outline btn-lg auth-google" data-google-signin>
         <svg class="google-icon" width="20" height="20"><use href="#i-google"></use></svg>
-        <span data-auth-google-text>Sign in with Google</span>
+        <span data-auth-google-text data-i18n="auth.google.signin">الدخول بحساب Google</span>
       </button>
 
       <div class="auth-status" data-auth-status hidden>
         <span class="spinner"></span>
-        <span data-i18n="login.connecting">Connecting…</span>
+        <span data-i18n="login.connecting">جارٍ الاتصال…</span>
       </div>
 
       <p class="login-foot">
-        <span data-i18n="login.terms">By continuing you agree to our</span>
-        <a href="#" data-i18n="login.termsLink">Terms</a>
-        <span data-i18n="login.and">and</span>
-        <a href="#" data-i18n="login.privacyLink">Privacy Policy</a>.
+        <span data-i18n="login.terms">بالمتابعة أنت توافق على</span>
+        <a href="#" data-i18n="login.termsLink">الشروط</a>
+        <span data-i18n="login.and">و</span>
+        <a href="#" data-i18n="login.privacyLink">سياسة الخصوصية</a>.
       </p>
     </main>
   </div>
 </section>
 
 <!-- ============================================================
-     SETUP PAGE — with subject grid
+     SETUP PAGE — إكمال الملف الشخصي
      ============================================================ -->
 <section class="page page-setup" data-page="setup" hidden>
   <header class="topbar setup-topbar">
     <div class="container setup-topbar-inner">
       <a href="#/" class="brand">
-        <span class="brand-mark"></span>
+        <img class="brand-logo" src="https://i.ibb.co/39cB8Cbv/file-00000000dac881f48b765e030a2b4313.png" alt="QeyasQuiz" draggable="false">
         <span class="brand-name">QeyasQuiz</span>
       </a>
       <div class="setup-topbar-actions">
-        <div class="lang-switch">
-          <button type="button" class="lang-btn is-active" data-lang="en">EN</button>
-          <button type="button" class="lang-btn" data-lang="ar">ع</button>
-        </div>
-        <button type="button" class="icon-btn" data-theme-toggle aria-label="Toggle theme">
+        <button type="button" class="icon-btn" data-theme-toggle aria-label="تبديل المظهر">
           <svg class="icon i-sun" width="18" height="18"><use href="#i-sun"></use></svg>
           <svg class="icon i-moon" width="18" height="18"><use href="#i-moon"></use></svg>
         </button>
         <button type="button" class="btn btn-ghost btn-sm" data-signout>
           <svg class="icon" width="14" height="14"><use href="#i-log-out"></use></svg>
-          <span data-i18n="setup.signout">Sign out</span>
+          <span data-i18n="setup.signout">تسجيل الخروج</span>
         </button>
       </div>
     </div>
@@ -384,56 +401,58 @@
   <main class="setup-main">
     <div class="container setup-container">
       <header class="setup-head">
-        <h1 data-i18n="setup.title">Complete your profile</h1>
-        <p data-i18n="setup.subtitle">This information appears on your exams and helps students identify you.</p>
+        <h1 data-i18n="setup.title">أكمل ملفك الشخصي</h1>
+        <p data-i18n="setup.subtitle">هذه المعلومات تظهر في امتحاناتك وتساعد الطلاب على التعرف عليك.</p>
       </header>
 
       <form class="setup-form" data-setup-form novalidate>
         <section class="setup-section card">
-          <h2 class="setup-section-title" data-i18n="setup.photo.title">Profile picture</h2>
+          <h2 class="setup-section-title" data-i18n="setup.photo.title">الصورة الشخصية</h2>
           <div class="avatar-editor">
             <img class="avatar-preview" data-avatar-preview src="" alt="">
             <div class="avatar-editor-actions">
               <input type="file" accept="image/png,image/jpeg,image/webp" id="avatarInput" hidden data-avatar-input>
-              <button type="button" class="btn btn-outline btn-sm" data-avatar-pick data-i18n="setup.photo.change">Change picture</button>
-              <button type="button" class="btn btn-ghost btn-sm" data-avatar-reset data-i18n="setup.photo.reset">Use Google photo</button>
-              <p class="field-hint" data-i18n="setup.photo.hint">JPG, PNG or WebP. Max 2 MB.</p>
+              <button type="button" class="btn btn-outline btn-sm" data-avatar-pick data-i18n="setup.photo.change">تغيير الصورة</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-avatar-reset data-i18n="setup.photo.reset">استخدام صورة Google</button>
+              <p class="field-hint" data-i18n="setup.photo.hint">JPG أو PNG أو WebP. الحد الأقصى 2 ميجابايت.</p>
             </div>
           </div>
         </section>
 
         <section class="setup-section card">
-          <h2 class="setup-section-title" data-i18n="setup.identity.title">Identity</h2>
+          <h2 class="setup-section-title" data-i18n="setup.identity.title">الهوية</h2>
+
           <div class="field">
-            <label class="field-label" for="usernameInput" data-i18n="setup.username.label">Username</label>
+            <label class="field-label" for="usernameInput" data-i18n="setup.username.label">اسم المستخدم</label>
             <div class="input-with-status">
               <input class="input" type="text" id="usernameInput" autocomplete="username" spellcheck="false" maxlength="24" data-username-input>
               <span class="input-status" data-username-status aria-live="polite"></span>
             </div>
-            <p class="field-hint" data-i18n="setup.username.hint">3–24 characters. Letters, numbers, and underscore only.</p>
+            <p class="field-hint" data-i18n="setup.username.hint">3–24 حرفًا. حروف وأرقام وشرطة سفلية فقط.</p>
             <p class="field-error" data-username-error hidden></p>
           </div>
+
           <div class="field">
-            <label class="field-label" for="fullNameInput" data-i18n="setup.fullName.label">Full name</label>
+            <label class="field-label" for="fullNameInput" data-i18n="setup.fullName.label">الاسم الكامل</label>
             <input class="input" type="text" id="fullNameInput" autocomplete="name" maxlength="80" data-fullname-input>
-            <p class="field-hint" data-i18n="setup.fullName.hint">Shown to students on exam pages.</p>
+            <p class="field-hint" data-i18n="setup.fullName.hint">يظهر للطلاب في صفحات الامتحان.</p>
             <p class="field-error" data-fullname-error hidden></p>
           </div>
         </section>
 
         <section class="setup-section card">
-          <h2 class="setup-section-title" data-i18n="setup.subjects.title">Your subjects</h2>
-          <p class="field-hint mb-4" data-i18n="setup.subjects.hint">Select all the subjects you teach. These will be available when creating exams.</p>
+          <h2 class="setup-section-title" data-i18n="setup.subjects.title">موادك</h2>
+          <p class="field-hint mb-4" data-i18n="setup.subjects.hint">اختر كل المواد التي تدرّسها. ستكون متاحة عند إنشاء الامتحانات.</p>
 
           <div class="subject-grid" data-subject-grid></div>
 
           <div class="field mt-4">
-            <label class="field-label" for="customSubject" data-i18n="setup.subjects.customLabel">Add custom subject</label>
+            <label class="field-label" for="customSubject" data-i18n="setup.subjects.customLabel">إضافة مادة مخصصة</label>
             <div class="row">
-              <input class="input flex-1" type="text" id="customSubject" maxlength="60" data-custom-subject placeholder="e.g. Quran, Art">
+              <input class="input flex-1" type="text" id="customSubject" maxlength="60" data-custom-subject placeholder="مثال: قرآن، رسم">
               <button type="button" class="btn btn-outline" data-add-custom-subject>
                 <svg class="icon" width="16" height="16"><use href="#i-plus"></use></svg>
-                <span data-i18n="setup.subjects.addCustom">Add</span>
+                <span data-i18n="setup.subjects.addCustom">أضف</span>
               </button>
             </div>
           </div>
@@ -443,8 +462,8 @@
         </section>
 
         <div class="setup-footer">
-          <button type="button" class="btn btn-ghost" data-signout data-i18n="setup.cancel">Cancel</button>
-          <button type="submit" class="btn btn-primary btn-lg" data-submit data-i18n="setup.submit">Complete Setup</button>
+          <button type="button" class="btn btn-ghost" data-signout data-i18n="setup.cancel">إلغاء</button>
+          <button type="submit" class="btn btn-primary btn-lg" data-submit data-i18n="setup.submit">إكمال الإعداد</button>
         </div>
       </form>
     </div>
@@ -452,13 +471,13 @@
 </section>
 
 <!-- ============================================================
-     APP PAGE — Teacher Dashboard
+     APP PAGE — لوحة المعلم
      ============================================================ -->
 <section class="page page-app" data-page="app" hidden>
 
   <div class="app-loading" data-app-loading hidden>
     <div class="app-loading-brand">
-      <span class="brand-mark"></span>
+      <img class="brand-logo brand-logo-lg" src="https://i.ibb.co/39cB8Cbv/file-00000000dac881f48b765e030a2b4313.png" alt="" draggable="false">
       <span>QeyasQuiz</span>
     </div>
     <div class="app-loading-bar"><span></span></div>
@@ -467,36 +486,36 @@
   <div class="app-shell" data-app-shell>
     <div class="sidebar-scrim" data-sidebar-scrim></div>
 
-    <aside class="sidebar" data-sidebar aria-label="Main navigation">
+    <aside class="sidebar" data-sidebar aria-label="القائمة الرئيسية">
       <a href="#/app/dashboard" class="brand sidebar-brand">
-        <span class="brand-mark"></span>
+        <img class="brand-logo" src="https://i.ibb.co/39cB8Cbv/file-00000000dac881f48b765e030a2b4313.png" alt="" draggable="false">
         <span class="brand-name">QeyasQuiz</span>
       </a>
 
       <nav class="side-nav">
         <a href="#/app/dashboard" class="side-link" data-route="dashboard">
           <svg class="icon"><use href="#i-home"></use></svg>
-          <span data-i18n="nav.dashboard">Dashboard</span>
+          <span data-i18n="nav.dashboard">الرئيسية</span>
         </a>
         <a href="#/app/exams" class="side-link" data-route="exams">
           <svg class="icon"><use href="#i-clipboard"></use></svg>
-          <span data-i18n="nav.exams">My Exams</span>
+          <span data-i18n="nav.exams">امتحاناتي</span>
         </a>
         <a href="#/app/bank" class="side-link" data-route="bank">
           <svg class="icon"><use href="#i-archive"></use></svg>
-          <span data-i18n="nav.bank">Question Bank</span>
+          <span data-i18n="nav.bank">بنك الأسئلة</span>
         </a>
         <a href="#/app/profile" class="side-link" data-route="profile">
           <svg class="icon"><use href="#i-user"></use></svg>
-          <span data-i18n="nav.profile">Profile</span>
+          <span data-i18n="nav.profile">الملف الشخصي</span>
         </a>
         <a href="#/app/settings" class="side-link" data-route="settings">
           <svg class="icon"><use href="#i-settings"></use></svg>
-          <span data-i18n="nav.settings">Settings</span>
+          <span data-i18n="nav.settings">الإعدادات</span>
         </a>
         <a href="#/app/packages" class="side-link" data-route="packages">
           <svg class="icon"><use href="#i-package"></use></svg>
-          <span data-i18n="nav.packages">Packages</span>
+          <span data-i18n="nav.packages">الباقات</span>
         </a>
       </nav>
 
@@ -506,7 +525,7 @@
           <div class="side-user-name" data-user-name>—</div>
           <div class="side-user-handle text-xs text-muted" data-user-handle>@—</div>
         </div>
-        <button type="button" class="icon-btn" data-signout aria-label="Sign out">
+        <button type="button" class="icon-btn" data-signout aria-label="تسجيل الخروج">
           <svg class="icon" width="16" height="16"><use href="#i-log-out"></use></svg>
         </button>
       </div>
@@ -515,164 +534,164 @@
     <div class="app-main">
       <header class="topbar app-topbar">
         <div class="app-topbar-left">
-          <button type="button" class="icon-btn sidebar-toggle" data-sidebar-toggle aria-label="Open menu">
+          <button type="button" class="icon-btn sidebar-toggle" data-sidebar-toggle aria-label="فتح القائمة">
             <svg class="icon" width="22" height="22"><use href="#i-menu"></use></svg>
           </button>
-          <button type="button" class="icon-btn back-btn" data-back hidden aria-label="Go back">
-            <svg class="icon" width="20" height="20"><use href="#i-arrow-left"></use></svg>
+          <button type="button" class="icon-btn back-btn" data-back hidden aria-label="رجوع">
+            <svg class="icon" width="20" height="20"><use href="#i-arrow-right"></use></svg>
           </button>
-          <h1 class="app-page-title" data-page-title>Dashboard</h1>
+          <h1 class="app-page-title" data-page-title>الرئيسية</h1>
         </div>
         <div class="app-topbar-right">
-          <button type="button" class="icon-btn" data-theme-toggle aria-label="Toggle theme">
+          <button type="button" class="icon-btn" data-theme-toggle aria-label="تبديل المظهر">
             <svg class="icon i-sun" width="18" height="18"><use href="#i-sun"></use></svg>
             <svg class="icon i-moon" width="18" height="18"><use href="#i-moon"></use></svg>
           </button>
           <button type="button" class="btn btn-primary btn-sm" data-create-exam>
             <svg class="icon" width="16" height="16"><use href="#i-plus"></use></svg>
-            <span data-i18n="action.createExam">Create Exam</span>
+            <span data-i18n="action.createExam">إنشاء امتحان</span>
           </button>
         </div>
       </header>
 
       <main class="app-content">
 
-        <!-- DASHBOARD -->
+        <!-- ============ DASHBOARD ============ -->
         <section class="view" data-view="dashboard" hidden>
           <section class="dash-welcome">
             <h2 class="dash-welcome-title" data-welcome-title>—</h2>
-            <p class="dash-welcome-sub" data-i18n="dash.welcome.sub">Here's what's happening with your exams.</p>
+            <p class="dash-welcome-sub" data-i18n="dash.welcome.sub">هذا ما يحدث في امتحاناتك.</p>
           </section>
 
           <section class="grid grid-4 stats-grid">
             <article class="card-brutal tint-1 offset-sm">
               <div class="card-icon"><svg class="icon" width="20" height="20"><use href="#i-clipboard"></use></svg></div>
               <div class="stat-value" data-stat="totalExams">0</div>
-              <div class="card-subtitle" data-i18n="stat.totalExams">Total Exams</div>
+              <div class="card-subtitle" data-i18n="stat.totalExams">إجمالي الامتحانات</div>
             </article>
             <article class="card-brutal tint-2 offset-sm">
               <div class="card-icon"><svg class="icon" width="20" height="20"><use href="#i-play"></use></svg></div>
               <div class="stat-value" data-stat="activeExams">0</div>
-              <div class="card-subtitle" data-i18n="stat.activeExams">Active Exams</div>
+              <div class="card-subtitle" data-i18n="stat.activeExams">الامتحانات النشطة</div>
             </article>
             <article class="card-brutal tint-3 offset-sm">
               <div class="card-icon"><svg class="icon" width="20" height="20"><use href="#i-users"></use></svg></div>
               <div class="stat-value" data-stat="submittedStudents">0</div>
-              <div class="card-subtitle" data-i18n="stat.submitted">Submitted Students</div>
+              <div class="card-subtitle" data-i18n="stat.submitted">طلاب سلّموا</div>
             </article>
             <article class="card-brutal tint-4 offset-sm">
               <div class="card-icon"><svg class="icon" width="20" height="20"><use href="#i-edit"></use></svg></div>
               <div class="stat-value" data-stat="waitingGrading">0</div>
-              <div class="card-subtitle" data-i18n="stat.waiting">Waiting for Grading</div>
+              <div class="card-subtitle" data-i18n="stat.waiting">بانتظار التصحيح</div>
             </article>
           </section>
 
           <section class="dash-section">
             <header class="dash-section-head">
-              <h3 data-i18n="dash.recentExams">Recent Exams</h3>
-              <a href="#/app/exams" class="btn btn-ghost btn-sm" data-i18n="action.viewAll">View all</a>
+              <h3 data-i18n="dash.recentExams">أحدث الامتحانات</h3>
+              <a href="#/app/exams" class="btn btn-ghost btn-sm" data-i18n="action.viewAll">عرض الكل</a>
             </header>
             <div class="grid grid-auto" data-recent-exams></div>
           </section>
         </section>
 
-        <!-- MY EXAMS -->
+        <!-- ============ MY EXAMS ============ -->
         <section class="view" data-view="exams" hidden>
           <div class="list-toolbar">
             <div class="search-box">
               <svg class="icon" width="16" height="16"><use href="#i-search"></use></svg>
-              <input class="input search-input" type="search" data-exam-search placeholder="Search exams…">
+              <input class="input search-input" type="search" data-exam-search data-i18n="exams.searchPlaceholder" placeholder="ابحث في الامتحانات…">
             </div>
             <div class="list-toolbar-actions">
               <select class="select select-sm" data-exam-filter-status>
-                <option value="" data-i18n="filter.allStatus">All statuses</option>
-                <option value="draft" data-i18n="status.draft">Draft</option>
-                <option value="scheduled" data-i18n="status.scheduled">Scheduled</option>
-                <option value="active" data-i18n="status.active">Active</option>
-                <option value="completed" data-i18n="status.completed">Completed</option>
+                <option value="" data-i18n="filter.allStatus">كل الحالات</option>
+                <option value="draft" data-i18n="status.draft">مسودة</option>
+                <option value="scheduled" data-i18n="status.scheduled">مجدول</option>
+                <option value="active" data-i18n="status.active">نشط</option>
+                <option value="completed" data-i18n="status.completed">مكتمل</option>
               </select>
               <button type="button" class="btn btn-primary btn-sm" data-create-exam>
                 <svg class="icon" width="14" height="14"><use href="#i-plus"></use></svg>
-                <span data-i18n="action.newExam">New Exam</span>
+                <span data-i18n="action.newExam">امتحان جديد</span>
               </button>
             </div>
           </div>
           <div class="grid grid-auto" data-exams-list></div>
           <div class="empty" data-exams-empty hidden>
             <div class="empty-icon"><svg class="icon" width="28" height="28"><use href="#i-clipboard"></use></svg></div>
-            <h3 data-i18n="empty.exams.title">No exams yet</h3>
-            <p data-i18n="empty.exams.text">Create your first exam to get started.</p>
-            <button type="button" class="btn btn-primary" data-create-exam data-i18n="action.createExam">Create Exam</button>
+            <h3 data-i18n="empty.exams.title">لا توجد امتحانات بعد</h3>
+            <p data-i18n="empty.exams.text">أنشئ أول امتحان للبدء.</p>
+            <button type="button" class="btn btn-primary" data-create-exam data-i18n="action.createExam">إنشاء امتحان</button>
           </div>
         </section>
 
-        <!-- BUILDER -->
+        <!-- ============ BUILDER ============ -->
         <section class="view" data-view="builder" hidden>
           <div class="builder">
             <header class="builder-head card">
               <div class="builder-head-left">
-                <h2 class="builder-title" data-builder-title data-i18n="builder.newExam">New Exam</h2>
-                <span class="badge badge-draft" data-builder-status data-i18n="status.draft">Draft</span>
+                <h2 class="builder-title" data-builder-title data-i18n="builder.newExam">امتحان جديد</h2>
+                <span class="badge badge-draft" data-builder-status data-i18n="status.draft">مسودة</span>
                 <span class="builder-save text-xs text-muted" data-builder-save-state></span>
               </div>
               <div class="builder-head-right">
-                <button type="button" class="btn btn-ghost btn-sm" data-builder-cancel data-i18n="action.cancel">Cancel</button>
-                <button type="button" class="btn btn-outline btn-sm" data-builder-preview data-i18n="action.preview">Preview</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-builder-cancel data-i18n="action.cancel">إلغاء</button>
+                <button type="button" class="btn btn-outline btn-sm" data-builder-preview data-i18n="action.preview">معاينة</button>
               </div>
             </header>
 
             <nav class="builder-steps">
               <button type="button" class="builder-step is-active" data-step="info">
-                <span>1</span><span data-i18n="builder.step.info">Info</span>
+                <span>1</span><span data-i18n="builder.step.info">البيانات</span>
               </button>
               <button type="button" class="builder-step" data-step="questions">
-                <span>2</span><span data-i18n="builder.step.questions">Questions</span>
+                <span>2</span><span data-i18n="builder.step.questions">الأسئلة</span>
               </button>
               <button type="button" class="builder-step" data-step="forms">
-                <span>3</span><span data-i18n="builder.step.forms">Forms</span>
+                <span>3</span><span data-i18n="builder.step.forms">النماذج</span>
               </button>
               <button type="button" class="builder-step" data-step="settings">
-                <span>4</span><span data-i18n="builder.step.settings">Settings</span>
+                <span>4</span><span data-i18n="builder.step.settings">الإعدادات</span>
               </button>
             </nav>
 
             <!-- PANEL 1: INFO -->
             <section class="builder-panel" data-panel="info">
               <div class="card">
-                <h3 class="builder-panel-title" data-i18n="builder.info.title">Exam information</h3>
+                <h3 class="builder-panel-title" data-i18n="builder.info.title">بيانات الامتحان</h3>
                 <div class="stack">
                   <div class="field">
-                    <label class="field-label" for="examTitle" data-i18n="builder.info.name">Exam name</label>
-                    <input class="input" type="text" id="examTitle" maxlength="120" data-field="title" placeholder="e.g. Algebra Final Term">
+                    <label class="field-label" for="examTitle" data-i18n="builder.info.name">اسم الامتحان</label>
+                    <input class="input" type="text" id="examTitle" maxlength="120" data-field="title" data-i18n="builder.info.namePlaceholder" placeholder="مثال: امتحان الجبر - الفصل الأول">
                     <p class="field-error" data-error="title" hidden></p>
                   </div>
                   <div class="grid grid-2">
                     <div class="field">
-                      <label class="field-label" for="examSubject" data-i18n="builder.info.subject">Subject</label>
+                      <label class="field-label" for="examSubject" data-i18n="builder.info.subject">المادة</label>
                       <select class="select" id="examSubject" data-field="subject"></select>
                       <p class="field-error" data-error="subject" hidden></p>
                     </div>
                     <div class="field">
-                      <label class="field-label" for="examGrade" data-i18n="builder.info.grade">Grade</label>
+                      <label class="field-label" for="examGrade" data-i18n="builder.info.grade">الصف</label>
                       <select class="select" id="examGrade" data-field="grade">
-                        <option value="" data-i18n="builder.info.selectGrade">Select grade</option>
-                        <optgroup label="Primary">
-                          <option value="p1">Primary 1</option>
-                          <option value="p2">Primary 2</option>
-                          <option value="p3">Primary 3</option>
-                          <option value="p4">Primary 4</option>
-                          <option value="p5">Primary 5</option>
-                          <option value="p6">Primary 6</option>
+                        <option value="" data-i18n="builder.info.selectGrade">اختر الصف</option>
+                        <optgroup label="الابتدائية">
+                          <option value="p1">الأول الابتدائي</option>
+                          <option value="p2">الثاني الابتدائي</option>
+                          <option value="p3">الثالث الابتدائي</option>
+                          <option value="p4">الرابع الابتدائي</option>
+                          <option value="p5">الخامس الابتدائي</option>
+                          <option value="p6">السادس الابتدائي</option>
                         </optgroup>
-                        <optgroup label="Preparatory">
-                          <option value="prep1">Preparatory 1</option>
-                          <option value="prep2">Preparatory 2</option>
-                          <option value="prep3">Preparatory 3</option>
+                        <optgroup label="الإعدادية">
+                          <option value="prep1">الأول الإعدادي</option>
+                          <option value="prep2">الثاني الإعدادي</option>
+                          <option value="prep3">الثالث الإعدادي</option>
                         </optgroup>
-                        <optgroup label="Secondary">
-                          <option value="sec1">Secondary 1</option>
-                          <option value="sec2">Secondary 2</option>
-                          <option value="sec3">Secondary 3</option>
+                        <optgroup label="الثانوية">
+                          <option value="sec1">الأول الثانوي</option>
+                          <option value="sec2">الثاني الثانوي</option>
+                          <option value="sec3">الثالث الثانوي</option>
                         </optgroup>
                       </select>
                       <p class="field-error" data-error="grade" hidden></p>
@@ -686,16 +705,16 @@
             <section class="builder-panel" data-panel="questions" hidden>
               <div class="card">
                 <header class="builder-panel-head">
-                  <h3 class="builder-panel-title" data-i18n="builder.questions.title">Questions</h3>
+                  <h3 class="builder-panel-title" data-i18n="builder.questions.title">الأسئلة</h3>
                   <div class="row">
-                    <span class="text-sm text-muted" data-i18n="builder.questions.total">Total:</span>
+                    <span class="text-sm text-muted" data-i18n="builder.questions.total">الدرجة الكلية:</span>
                     <span class="fw-bold" data-total-score>0</span>
                   </div>
                 </header>
                 <div class="questions-list" data-questions-list></div>
                 <button type="button" class="btn btn-outline btn-block mt-4" data-add-question>
                   <svg class="icon" width="16" height="16"><use href="#i-plus"></use></svg>
-                  <span data-i18n="action.addQuestion">Add Question</span>
+                  <span data-i18n="action.addQuestion">إضافة سؤال</span>
                 </button>
               </div>
             </section>
@@ -705,12 +724,12 @@
               <div class="card">
                 <header class="builder-panel-head">
                   <div>
-                    <h3 class="builder-panel-title" data-i18n="builder.forms.title">Exam forms</h3>
-                    <p class="field-hint" data-i18n="builder.forms.hint">Each form has its own questions. Students receive one form at random.</p>
+                    <h3 class="builder-panel-title" data-i18n="builder.forms.title">نماذج الامتحان</h3>
+                    <p class="field-hint" data-i18n="builder.forms.hint">كل نموذج له أسئلته المنفصلة. الطالب يحصل على نموذج عشوائي.</p>
                   </div>
                   <button type="button" class="btn btn-outline btn-sm" data-add-form>
                     <svg class="icon" width="14" height="14"><use href="#i-plus"></use></svg>
-                    <span data-i18n="action.addForm">Add Form</span>
+                    <span data-i18n="action.addForm">إضافة نموذج</span>
                   </button>
                 </header>
 
@@ -719,17 +738,17 @@
                 <div class="forms-content mt-4" data-forms-content>
                   <div class="forms-current-header">
                     <div class="row-between">
-                      <span class="fw-semibold" data-form-current-name>Form A</span>
+                      <span class="fw-semibold" data-form-current-name>النموذج أ</span>
                       <span class="text-sm text-muted">
                         <span data-form-question-count>0</span>
-                        <span data-i18n="common.questions">questions</span>
+                        <span data-i18n="common.questions">سؤال</span>
                       </span>
                     </div>
                   </div>
                   <div class="questions-list mt-4" data-form-questions-list></div>
                   <button type="button" class="btn btn-outline btn-block mt-4" data-add-form-question>
                     <svg class="icon" width="16" height="16"><use href="#i-plus"></use></svg>
-                    <span data-i18n="action.addQuestion">Add Question</span>
+                    <span data-i18n="action.addQuestion">إضافة سؤال</span>
                   </button>
                 </div>
               </div>
@@ -738,10 +757,10 @@
             <!-- PANEL 4: SETTINGS -->
             <section class="builder-panel" data-panel="settings" hidden>
               <div class="card">
-                <h3 class="builder-panel-title" data-i18n="builder.settings.title">Exam settings</h3>
+                <h3 class="builder-panel-title" data-i18n="builder.settings.title">إعدادات الامتحان</h3>
 
                 <div class="field mt-4">
-                  <span class="field-label" data-i18n="builder.settings.displayMode">Display mode</span>
+                  <span class="field-label" data-i18n="builder.settings.displayMode">طريقة العرض</span>
                   <div class="mode-grid">
                     <label class="mode-card" data-mode-card="scroll">
                       <input type="radio" name="displayMode" value="scroll" data-field="displayMode" checked>
@@ -749,8 +768,8 @@
                         <div class="mode-icon">
                           <svg class="icon" width="24" height="24"><use href="#i-file-text"></use></svg>
                         </div>
-                        <div class="mode-name" data-i18n="builder.settings.mode.scroll">Scroll</div>
-                        <div class="mode-desc" data-i18n="builder.settings.mode.scrollDesc">All questions on one page</div>
+                        <div class="mode-name" data-i18n="builder.settings.mode.scroll">كل الأسئلة</div>
+                        <div class="mode-desc" data-i18n="builder.settings.mode.scrollDesc">ورقة امتحان كاملة</div>
                       </div>
                     </label>
                     <label class="mode-card" data-mode-card="single">
@@ -759,8 +778,8 @@
                         <div class="mode-icon">
                           <svg class="icon" width="24" height="24"><use href="#i-layers"></use></svg>
                         </div>
-                        <div class="mode-name" data-i18n="builder.settings.mode.single">One by One</div>
-                        <div class="mode-desc" data-i18n="builder.settings.mode.singleDesc">One question per screen</div>
+                        <div class="mode-name" data-i18n="builder.settings.mode.single">سؤال سؤال</div>
+                        <div class="mode-desc" data-i18n="builder.settings.mode.singleDesc">سؤال واحد في الشاشة</div>
                       </div>
                     </label>
                   </div>
@@ -770,22 +789,22 @@
 
                 <div class="grid grid-2">
                   <div class="field">
-                    <label class="field-label" for="examStart" data-i18n="builder.settings.startAt">Opens at</label>
+                    <label class="field-label" for="examStart" data-i18n="builder.settings.startAt">يفتح في</label>
                     <input class="input" type="datetime-local" id="examStart" data-field="startAt">
-                    <p class="field-hint" data-i18n="builder.settings.startHint">Students cannot start before this time.</p>
+                    <p class="field-hint" data-i18n="builder.settings.startHint">لا يمكن للطلاب البدء قبل هذا الوقت.</p>
                   </div>
                   <div class="field">
-                    <label class="field-label" for="examEnd" data-i18n="builder.settings.endAt">Closes at</label>
+                    <label class="field-label" for="examEnd" data-i18n="builder.settings.endAt">يغلق في</label>
                     <input class="input" type="datetime-local" id="examEnd" data-field="endAt">
-                    <p class="field-hint" data-i18n="builder.settings.endHint">Students cannot start after this time.</p>
+                    <p class="field-hint" data-i18n="builder.settings.endHint">لا يمكن للطلاب البدء بعد هذا الوقت.</p>
                   </div>
                   <div class="field">
-                    <label class="field-label" for="examDuration" data-i18n="builder.settings.duration">Duration (minutes)</label>
+                    <label class="field-label" for="examDuration" data-i18n="builder.settings.duration">المدة (دقائق)</label>
                     <input class="input" type="number" id="examDuration" min="1" max="600" value="60" data-field="duration">
                   </div>
                   <div class="field">
-                    <label class="field-label" for="examAccessCode" data-i18n="builder.settings.accessCodeValue">Access code (optional)</label>
-                    <input class="input" type="text" id="examAccessCode" maxlength="12" data-field="accessCode" placeholder="e.g. ABC123">
+                    <label class="field-label" for="examAccessCode" data-i18n="builder.settings.accessCodeValue">كود الدخول (اختياري)</label>
+                    <input class="input" type="text" id="examAccessCode" maxlength="12" data-field="accessCode" data-i18n="builder.settings.accessCodePlaceholder" placeholder="مثال: ABC123">
                   </div>
                 </div>
 
@@ -794,68 +813,67 @@
                 <div class="stack-sm">
                   <label class="checkbox">
                     <input type="checkbox" data-field="shuffleQuestions">
-                    <span data-i18n="builder.settings.shuffle">Shuffle question order per student</span>
+                    <span data-i18n="builder.settings.shuffle">خلط ترتيب الأسئلة لكل طالب</span>
                   </label>
                   <label class="checkbox">
                     <input type="checkbox" data-field="requireAccessCode">
-                    <span data-i18n="builder.settings.accessCode">Require access code</span>
+                    <span data-i18n="builder.settings.accessCode">طلب كود دخول</span>
                   </label>
                   <label class="checkbox">
                     <input type="checkbox" data-field="requireFullscreen">
-                    <span data-i18n="builder.settings.fullscreen">Require fullscreen during exam</span>
+                    <span data-i18n="builder.settings.fullscreen">طلب ملء الشاشة خلال الامتحان</span>
                   </label>
                 </div>
               </div>
             </section>
 
-            <!-- FOOTER with Next/Back -->
             <footer class="builder-footer">
               <button type="button" class="btn btn-ghost btn-lg" data-builder-back disabled>
-                <svg class="icon" width="18" height="18"><use href="#i-chevron-left"></use></svg>
-                <span data-i18n="action.back">Back</span>
+                <svg class="icon" width="18" height="18"><use href="#i-chevron-right"></use></svg>
+                <span data-i18n="action.back">السابق</span>
               </button>
 
               <div class="builder-footer-center">
                 <span class="text-sm text-muted" data-builder-step-indicator>
-                  <span data-i18n="builder.step">Step</span> 1 / 4
+                  <span data-i18n="builder.step">خطوة</span> 1 / 4
                 </span>
               </div>
 
               <div class="builder-footer-right">
-                <button type="button" class="btn btn-outline btn-lg" data-builder-save data-i18n="action.save">Save</button>
+                <button type="button" class="btn btn-outline btn-lg" data-builder-save data-i18n="action.save">حفظ</button>
                 <button type="button" class="btn btn-primary btn-lg" data-builder-next>
-                  <span data-i18n="action.next">Next</span>
-                  <svg class="icon" width="18" height="18"><use href="#i-chevron-right"></use></svg>
+                  <span data-i18n="action.next">التالي</span>
+                  <svg class="icon" width="18" height="18"><use href="#i-chevron-left"></use></svg>
                 </button>
                 <button type="button" class="btn btn-success btn-lg" data-builder-publish hidden>
                   <svg class="icon" width="18" height="18"><use href="#i-check"></use></svg>
-                  <span data-i18n="action.publishExam">Publish Exam</span>
+                  <span data-i18n="action.publishExam">نشر الامتحان</span>
                 </button>
               </div>
             </footer>
           </div>
         </section>
 
-        <!-- EXAM DETAILS -->
+        <!-- ============ EXAM DETAILS ============ -->
         <section class="view" data-view="exam-details" hidden>
           <div class="exam-details" data-exam-details></div>
         </section>
 
-        <!-- GRADING -->
+        <!-- ============ GRADING ============ -->
         <section class="view" data-view="grading" hidden>
           <div class="grading" data-grading-host></div>
         </section>
 
-        <!-- BANK -->
+        <!-- ============ QUESTION BANK ============ -->
         <section class="view" data-view="bank" hidden>
           <div class="empty">
             <div class="empty-icon"><svg class="icon" width="28" height="28"><use href="#i-archive"></use></svg></div>
-            <h3 data-i18n="empty.bank.title">Question Bank</h3>
-            <p data-i18n="empty.bank.text">Save questions from your exams to reuse them later.</p>
+            <h3 data-i18n="empty.bank.title">بنك الأسئلة</h3>
+            <p data-i18n="empty.bank.text">احفظ أسئلة من امتحاناتك لإعادة استخدامها لاحقًا.</p>
           </div>
         </section>
 
-        <!-- PROFILE -->
+        <!-- ============ PROFILE ============ -->
         <section class="view" data-view="profile" hidden>
           <div class="card profile-card">
             <div class="profile-head">
@@ -868,42 +886,35 @@
             </div>
           </div>
           <div class="card mt-4">
-            <h3 class="builder-panel-title" data-i18n="profile.subjects">Subjects</h3>
+            <h3 class="builder-panel-title" data-i18n="profile.subjects">المواد</h3>
             <div class="chips mt-3" data-profile-subjects-chips></div>
           </div>
           <div class="card mt-4 danger-zone">
-            <h3 class="builder-panel-title text-danger" data-i18n="profile.danger">Danger zone</h3>
-            <p class="text-secondary text-sm mt-2" data-i18n="profile.dangerText">Deleting your account removes all your exams, students, and results permanently.</p>
-            <button type="button" class="btn btn-danger mt-3" data-delete-account data-i18n="action.deleteAccount">Delete Account</button>
+            <h3 class="builder-panel-title text-danger" data-i18n="profile.danger">منطقة الخطر</h3>
+            <p class="text-secondary text-sm mt-2" data-i18n="profile.dangerText">حذف الحساب يمسح كل امتحاناتك وطلابك ونتائجك نهائيًا.</p>
+            <button type="button" class="btn btn-danger mt-3" data-delete-account data-i18n="action.deleteAccount">حذف الحساب</button>
           </div>
         </section>
 
-        <!-- SETTINGS -->
+        <!-- ============ SETTINGS ============ -->
         <section class="view" data-view="settings" hidden>
           <div class="grid grid-2">
             <div class="card">
-              <h3 class="builder-panel-title" data-i18n="settings.appearance">Appearance</h3>
+              <h3 class="builder-panel-title" data-i18n="settings.appearance">المظهر</h3>
               <div class="stack mt-4">
-                <label class="checkbox"><input type="radio" name="theme-pref" value="light" data-setting-theme><span data-i18n="settings.light">Light mode</span></label>
-                <label class="checkbox"><input type="radio" name="theme-pref" value="dark" data-setting-theme><span data-i18n="settings.dark">Dark mode</span></label>
-              </div>
-            </div>
-            <div class="card">
-              <h3 class="builder-panel-title" data-i18n="settings.language">Language</h3>
-              <div class="stack mt-4">
-                <label class="checkbox"><input type="radio" name="lang-pref" value="en" data-setting-lang><span>English</span></label>
-                <label class="checkbox"><input type="radio" name="lang-pref" value="ar" data-setting-lang><span>العربية</span></label>
+                <label class="checkbox"><input type="radio" name="theme-pref" value="light" data-setting-theme><span data-i18n="settings.light">الوضع الفاتح</span></label>
+                <label class="checkbox"><input type="radio" name="theme-pref" value="dark" data-setting-theme><span data-i18n="settings.dark">الوضع الداكن</span></label>
               </div>
             </div>
           </div>
         </section>
 
-        <!-- PACKAGES -->
+        <!-- ============ PACKAGES ============ -->
         <section class="view" data-view="packages" hidden>
           <div class="empty">
             <div class="empty-icon"><svg class="icon" width="28" height="28"><use href="#i-package"></use></svg></div>
-            <h3 data-i18n="packages.title">Packages</h3>
-            <p data-i18n="packages.text">Under development. Plans and pricing will be available soon.</p>
+            <h3 data-i18n="packages.title">الباقات</h3>
+            <p data-i18n="packages.text">تحت التطوير. الخطط والأسعار ستكون متاحة قريبًا.</p>
           </div>
         </section>
 
@@ -913,7 +924,7 @@
 </section>
 
 <!-- ============================================================
-     EXAM PAGE — Student
+     EXAM PAGE — صفحة الامتحان للطالب
      ============================================================ -->
 <section class="page page-exam" data-page="exam" hidden>
 
@@ -925,11 +936,11 @@
   <div class="exam-loading" data-exam-loading>
     <div class="exam-loading-inner">
       <div class="app-loading-brand">
-        <span class="brand-mark"></span>
+        <img class="brand-logo brand-logo-lg" src="https://i.ibb.co/39cB8Cbv/file-00000000dac881f48b765e030a2b4313.png" alt="" draggable="false">
         <span>QeyasQuiz</span>
       </div>
       <div class="app-loading-bar mt-4"><span></span></div>
-      <p class="text-muted text-sm mt-4" data-i18n="exam.loading">Loading exam…</p>
+      <p class="text-muted text-sm mt-4" data-i18n="exam.loading">جارٍ تحميل الامتحان…</p>
     </div>
   </div>
 
@@ -938,29 +949,29 @@
       <div class="exam-error-icon"><svg class="icon" width="32" height="32"><use href="#i-alert"></use></svg></div>
       <h2 data-exam-error-title></h2>
       <p data-exam-error-message></p>
-      <a href="#/" class="btn btn-primary" data-i18n="action.goHome">Go Home</a>
+      <a href="#/" class="btn btn-primary" data-i18n="action.goHome">الرئيسية</a>
     </div>
   </div>
 
   <!-- ENTRY MODAL -->
   <div class="modal-overlay" data-entry-modal hidden>
-    <div class="modal exam-entry-modal" role="dialog" aria-modal="true" aria-labelledby="entryTitle">
+    <div class="modal exam-entry-modal" role="dialog" aria-modal="true">
       <div class="entry-header">
         <div class="entry-brand">
-          <span class="brand-mark"></span>
+          <img class="brand-logo brand-logo-sm" src="https://i.ibb.co/39cB8Cbv/file-00000000dac881f48b765e030a2b4313.png" alt="" draggable="false">
           <span class="entry-brand-text">QeyasQuiz</span>
         </div>
-        <span class="entry-badge" data-i18n="entry.badge">Exam</span>
+        <span class="entry-badge" data-i18n="entry.badge">امتحان</span>
       </div>
 
-      <h2 class="entry-title" id="entryTitle" data-entry-title>—</h2>
-      <p class="entry-subtitle" data-i18n="entry.subtitle">Please review the details and enter your name to begin.</p>
+      <h2 class="entry-title" data-entry-title>—</h2>
+      <p class="entry-subtitle" data-i18n="entry.subtitle">راجع التفاصيل وأدخل اسمك للبدء.</p>
 
       <div class="entry-teacher" data-entry-teacher hidden>
         <img class="entry-teacher-avatar" data-entry-teacher-avatar src="" alt="">
         <div class="entry-teacher-info">
           <div class="entry-teacher-name" data-entry-teacher-name>—</div>
-          <div class="entry-teacher-role" data-i18n="entry.teacher">Teacher</div>
+          <div class="entry-teacher-role" data-i18n="entry.teacher">المعلم</div>
         </div>
       </div>
 
@@ -972,30 +983,30 @@
         <div class="field entry-field">
           <label class="field-label entry-label" for="studentName">
             <svg class="icon" width="16" height="16"><use href="#i-user"></use></svg>
-            <span data-i18n="exam.entry.studentName">Your full name</span>
+            <span data-i18n="exam.entry.studentName">اسمك الكامل</span>
           </label>
-          <input class="input entry-input" type="text" id="studentName" maxlength="80" autocomplete="name" data-entry-name placeholder="e.g. Ahmed Mohamed">
+          <input class="input entry-input" type="text" id="studentName" maxlength="80" autocomplete="name" data-entry-name data-i18n="exam.entry.studentNamePlaceholder" placeholder="مثال: أحمد محمد">
           <p class="field-error" data-entry-name-error hidden></p>
         </div>
 
         <div class="field entry-field" data-entry-code-field hidden>
           <label class="field-label entry-label" for="accessCode">
             <svg class="icon" width="16" height="16"><use href="#i-lock"></use></svg>
-            <span data-i18n="exam.entry.accessCode">Access code</span>
+            <span data-i18n="exam.entry.accessCode">كود الدخول</span>
           </label>
-          <input class="input entry-input" type="text" id="accessCode" maxlength="12" autocomplete="off" data-entry-code placeholder="Enter code">
+          <input class="input entry-input" type="text" id="accessCode" maxlength="12" autocomplete="off" data-entry-code data-i18n="exam.entry.accessCodePlaceholder" placeholder="أدخل الكود">
           <p class="field-error" data-entry-code-error hidden></p>
         </div>
 
         <button type="submit" class="btn btn-primary btn-lg btn-block entry-submit" data-entry-submit>
-          <span data-i18n="exam.entry.start">Start Exam</span>
-          <svg class="icon" width="20" height="20"><use href="#i-arrow-right"></use></svg>
+          <span data-i18n="exam.entry.start">ابدأ الامتحان</span>
+          <svg class="icon" width="20" height="20"><use href="#i-arrow-left"></use></svg>
         </button>
       </form>
 
       <div class="entry-foot">
         <svg class="icon" width="14" height="14"><use href="#i-info"></use></svg>
-        <span data-i18n="exam.entry.foot">Make sure your name is correct — it will be used for grading.</span>
+        <span data-i18n="exam.entry.foot">تأكد من صحة اسمك — سيُستخدم للتصحيح.</span>
       </div>
     </div>
   </div>
@@ -1003,10 +1014,10 @@
   <!-- RESUME MODAL -->
   <div class="modal-overlay" data-resume-modal hidden>
     <div class="modal" role="dialog">
-      <h2 class="modal-title" data-i18n="exam.resume.title">Resume your exam?</h2>
-      <p class="modal-body mt-3" data-i18n="exam.resume.text">You have an exam in progress. Your answers and remaining time have been preserved.</p>
+      <h2 class="modal-title" data-i18n="exam.resume.title">استئناف الامتحان؟</h2>
+      <p class="modal-body mt-3" data-i18n="exam.resume.text">لديك امتحان جارٍ. تم حفظ إجاباتك والوقت المتبقي.</p>
       <div class="modal-foot">
-        <button type="button" class="btn btn-primary" data-resume-continue data-i18n="exam.resume.continue">Resume Exam</button>
+        <button type="button" class="btn btn-primary" data-resume-continue data-i18n="exam.resume.continue">استئناف</button>
       </div>
     </div>
   </div>
@@ -1014,12 +1025,12 @@
   <!-- CONFIRM SUBMIT MODAL -->
   <div class="modal-overlay" data-confirm-submit-modal hidden>
     <div class="modal" role="dialog">
-      <h2 class="modal-title" data-i18n="exam.confirm.title">Submit exam?</h2>
-      <p class="modal-body mt-3" data-i18n="exam.confirm.text">Are you sure you want to submit your exam? You cannot make changes after submission.</p>
+      <h2 class="modal-title" data-i18n="exam.confirm.title">تسليم الامتحان؟</h2>
+      <p class="modal-body mt-3" data-i18n="exam.confirm.text">هل أنت متأكد؟ لا يمكنك التعديل بعد التسليم.</p>
       <div class="exam-confirm-summary" data-confirm-summary></div>
       <div class="modal-foot">
-        <button type="button" class="btn btn-ghost" data-confirm-cancel data-i18n="action.cancel">Cancel</button>
-        <button type="button" class="btn btn-primary" data-confirm-submit data-i18n="action.submit">Submit</button>
+        <button type="button" class="btn btn-ghost" data-confirm-cancel data-i18n="action.cancel">إلغاء</button>
+        <button type="button" class="btn btn-primary" data-confirm-submit data-i18n="action.submit">تسليم</button>
       </div>
     </div>
   </div>
@@ -1028,10 +1039,10 @@
   <div class="modal-overlay" data-update-modal hidden>
     <div class="modal" role="dialog">
       <div class="modal-warning-icon"><svg class="icon" width="32" height="32"><use href="#i-alert"></use></svg></div>
-      <h2 class="modal-title" data-i18n="exam.update.title">Exam Updated</h2>
-      <p class="modal-body mt-3" data-i18n="exam.update.text">The teacher has updated this exam. Refresh to load the latest version. Your answers will be preserved.</p>
+      <h2 class="modal-title" data-i18n="exam.update.title">تم تحديث الامتحان</h2>
+      <p class="modal-body mt-3" data-i18n="exam.update.text">قام المعلم بتحديث الامتحان. حدّث الصفحة لتحميل النسخة الأحدث. إجاباتك ستبقى.</p>
       <div class="modal-foot">
-        <button type="button" class="btn btn-primary" data-update-refresh data-i18n="exam.update.refresh">Refresh Exam</button>
+        <button type="button" class="btn btn-primary" data-update-refresh data-i18n="exam.update.refresh">تحديث الامتحان</button>
       </div>
     </div>
   </div>
@@ -1040,10 +1051,27 @@
   <div class="modal-overlay" data-security-modal hidden>
     <div class="modal" role="dialog">
       <div class="modal-warning-icon"><svg class="icon" width="32" height="32"><use href="#i-shield"></use></svg></div>
-      <h2 class="modal-title" data-security-title>Security Warning</h2>
+      <h2 class="modal-title" data-security-title>تحذير أمني</h2>
       <p class="modal-body mt-3" data-security-message></p>
       <div class="modal-foot">
-        <button type="button" class="btn btn-primary" data-security-ok>OK</button>
+        <button type="button" class="btn btn-primary" data-security-ok data-i18n="action.ok">حسنًا</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- RESULT CODE MODAL -->
+  <div class="modal-overlay" data-result-code-modal hidden>
+    <div class="modal result-code-modal" role="dialog">
+      <div class="modal-success-icon"><svg class="icon" width="32" height="32"><use href="#i-check-circle"></use></svg></div>
+      <h2 class="modal-title" data-i18n="exam.submitted.title">تم تسليم الامتحان</h2>
+      <p class="modal-body mt-3" data-i18n="exam.submitted.text">احفظ الكود ده للرجوع لنتيجتك في أي وقت.</p>
+      <div class="result-code-display" data-result-code-display>—</div>
+      <button type="button" class="btn btn-outline btn-block" data-copy-result-code>
+        <svg class="icon" width="16" height="16"><use href="#i-copy"></use></svg>
+        <span data-i18n="action.copyCode">نسخ الكود</span>
+      </button>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-primary" data-view-result data-i18n="exam.submitted.viewResult">عرض النتيجة</button>
       </div>
     </div>
   </div>
@@ -1060,13 +1088,13 @@
       <div class="exam-topbar-right">
         <div class="exam-connection" data-connection-indicator>
           <span class="exam-connection-dot"></span>
-          <span class="exam-connection-text" data-connection-text data-i18n="exam.connected">Connected</span>
+          <span class="exam-connection-text" data-connection-text data-i18n="exam.connected">متصل</span>
         </div>
         <div class="exam-timer" data-timer>
           <svg class="icon" width="18" height="18"><use href="#i-timer"></use></svg>
           <span class="exam-timer-value" data-timer-value>--:--:--</span>
         </div>
-        <button type="button" class="icon-btn" data-exam-fullscreen aria-label="Fullscreen">
+        <button type="button" class="icon-btn" data-exam-fullscreen aria-label="ملء الشاشة">
           <svg class="icon" width="18" height="18"><use href="#i-maximize"></use></svg>
         </button>
       </div>
@@ -1079,24 +1107,22 @@
           <span class="exam-progress-text" data-progress-text>0%</span>
         </div>
 
-        <!-- Scroll mode: all questions -->
         <div class="exam-questions-scroll" data-questions-scroll hidden>
           <div class="exam-questions" data-questions-host-scroll></div>
         </div>
 
-        <!-- Single mode: one question + nav -->
         <div class="exam-questions-single" data-questions-single hidden>
           <div class="exam-single-nav">
-            <button type="button" class="icon-btn" data-prev aria-label="Previous">
-              <svg class="icon" width="20" height="20"><use href="#i-chevron-left"></use></svg>
+            <button type="button" class="icon-btn" data-prev aria-label="السابق">
+              <svg class="icon" width="20" height="20"><use href="#i-chevron-right"></use></svg>
             </button>
             <div class="exam-single-indicator">
               <span class="exam-single-current" data-single-current>1</span>
               <span class="exam-single-sep">/</span>
               <span class="exam-single-total" data-single-total>1</span>
             </div>
-            <button type="button" class="icon-btn" data-next aria-label="Next">
-              <svg class="icon" width="20" height="20"><use href="#i-chevron-right"></use></svg>
+            <button type="button" class="icon-btn" data-next aria-label="التالي">
+              <svg class="icon" width="20" height="20"><use href="#i-chevron-left"></use></svg>
             </button>
           </div>
 
@@ -1108,7 +1134,7 @@
         <nav class="exam-actions">
           <button type="button" class="btn btn-success btn-lg" data-submit-exam>
             <svg class="icon" width="18" height="18"><use href="#i-check"></use></svg>
-            <span data-i18n="action.submitExam">Submit Exam</span>
+            <span data-i18n="action.submitExam">تسليم الامتحان</span>
           </button>
         </nav>
       </main>
@@ -1117,26 +1143,22 @@
 
   <div class="exam-offline" data-offline-banner hidden>
     <svg class="icon" width="18" height="18"><use href="#i-wifi-off"></use></svg>
-    <span data-i18n="exam.offline">Connection lost. Your answers are saved locally and will sync when you reconnect.</span>
+    <span data-i18n="exam.offline">فقد الاتصال. إجاباتك محفوظة محليًا وستتم المزامنة عند عودة الاتصال.</span>
   </div>
 </section>
 
 <!-- ============================================================
-     RESULT PAGE
+     RESULT PAGE — صفحة النتيجة
      ============================================================ -->
 <section class="page page-result" data-page="result" hidden>
   <header class="topbar result-topbar">
     <div class="container result-topbar-inner">
       <a href="#/" class="brand">
-        <span class="brand-mark"></span>
+        <img class="brand-logo" src="https://i.ibb.co/39cB8Cbv/file-00000000dac881f48b765e030a2b4313.png" alt="" draggable="false">
         <span class="brand-name">QeyasQuiz</span>
       </a>
       <div class="result-topbar-actions">
-        <div class="lang-switch">
-          <button type="button" class="lang-btn is-active" data-lang="en">EN</button>
-          <button type="button" class="lang-btn" data-lang="ar">ع</button>
-        </div>
-        <button type="button" class="icon-btn" data-theme-toggle aria-label="Toggle theme">
+        <button type="button" class="icon-btn" data-theme-toggle aria-label="تبديل المظهر">
           <svg class="icon i-sun" width="18" height="18"><use href="#i-sun"></use></svg>
           <svg class="icon i-moon" width="18" height="18"><use href="#i-moon"></use></svg>
         </button>
@@ -1144,14 +1166,34 @@
     </div>
   </header>
 
-  <div class="result-loading" data-result-loading>
+  <!-- Result lookup form (when no attempt id) -->
+  <div class="result-lookup" data-result-lookup hidden>
+    <div class="container result-container">
+      <div class="card result-lookup-card">
+        <div class="result-lookup-icon">
+          <svg class="icon" width="32" height="32"><use href="#i-search"></use></svg>
+        </div>
+        <h2 data-i18n="result.lookup.title">تحقق من نتيجتك</h2>
+        <p class="text-muted" data-i18n="result.lookup.sub">أدخل الكود الذي حصلت عليه بعد التسليم</p>
+        <div class="field mt-4">
+          <input class="input result-code-input" type="text" maxlength="9" data-result-code-input data-i18n="result.lookup.codePlaceholder" placeholder="XXXX-XXXX">
+        </div>
+        <button class="btn btn-primary btn-lg btn-block mt-4" data-result-lookup-btn>
+          <svg class="icon" width="18" height="18"><use href="#i-search"></use></svg>
+          <span data-i18n="result.lookup.check">تحقق</span>
+        </button>
+        <p class="field-error mt-3" data-result-lookup-error hidden></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="result-loading" data-result-loading hidden>
     <div class="app-loading-bar"><span></span></div>
-    <p class="text-muted text-sm mt-4" data-i18n="result.loading">Loading result…</p>
+    <p class="text-muted text-sm mt-4" data-i18n="result.loading">جارٍ تحميل النتيجة…</p>
   </div>
 
   <main class="result-main" data-result-main hidden>
     <div class="container result-container">
-
       <div class="result-summary card-brutal tint-1 offset-lg">
         <span class="badge-brutal" data-result-status>—</span>
         <h1 class="result-title" data-result-exam-title>—</h1>
@@ -1165,24 +1207,25 @@
 
         <div class="result-waiting" data-waiting-block hidden>
           <svg class="icon" width="28" height="28"><use href="#i-clock"></use></svg>
-          <p data-i18n="result.waiting">Waiting for grading.</p>
+          <p data-i18n="result.waiting">بانتظار التصحيح.</p>
         </div>
 
         <div class="result-feedback" data-feedback-block hidden>
-          <h3 data-i18n="result.feedback">Teacher Feedback</h3>
+          <h3 data-i18n="result.feedback">ملاحظات المعلم</h3>
           <p data-feedback-text>—</p>
         </div>
       </div>
 
       <div class="result-review-head" data-review-head hidden>
-        <h2 data-i18n="result.review">Answer Review</h2>
-        <p class="text-muted text-sm" data-i18n="result.reviewSub">See your answers alongside the correct answers.</p>
+        <h2 data-i18n="result.review">مراجعة الإجابات</h2>
+        <p class="text-muted text-sm" data-i18n="result.reviewSub">شاهد إجاباتك بجانب الإجابات الصحيحة.</p>
       </div>
 
       <div class="result-review" data-result-review></div>
 
       <div class="result-actions">
-        <a href="#/" class="btn btn-primary" data-i18n="action.goHome">Go Home</a>
+        <a href="#/" class="btn btn-primary" data-i18n="action.goHome">الرئيسية</a>
+        <button type="button" class="btn btn-outline" data-result-new-lookup data-i18n="result.anotherCode">كود آخر</button>
       </div>
     </div>
   </main>
