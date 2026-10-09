@@ -131,7 +131,6 @@ body{
              color var(--dur-base) var(--ease-out);
 }
 
-/* ============ ANTI-COPY GLOBAL ============ */
 body {
   -webkit-user-select: none;
   -moz-user-select: none;
@@ -502,6 +501,20 @@ input::selection, textarea::selection {
 @media (max-width:560px){
   .modal-foot{flex-direction:column-reverse}
   .modal-foot .btn{width:100%}
+}
+
+/* ============================================================
+   12.b ATTEMPT DETAILS MODAL
+   ============================================================ */
+.attempt-details-modal { max-width: 720px; }
+.attempt-details-modal .quick-report {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+.attempt-details-modal .quick-report-value {
+  font-size: var(--fs-xl);
+}
+.attempt-details-modal .builder-panel-title {
+  font-size: var(--fs-md);
 }
 
 /* ============================================================
@@ -1177,7 +1190,6 @@ body[data-three="off"] .bg-canvas { display: none !important; }
   transition: border-color var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out);
 }
 
-/* ============ QUESTION STATUS BAR ============ */
 .question-card .q-status-bar {
   position: absolute;
   top: 0;
@@ -1245,7 +1257,6 @@ body[data-three="off"] .bg-canvas { display: none !important; }
   color:var(--text-secondary);flex-shrink:0;
 }
 
-/* ============ SAVE BUTTON ROW ============ */
 .question-card .q-save-row {
   display: flex;
   justify-content: flex-start;
@@ -1281,7 +1292,6 @@ body[data-three="off"] .bg-canvas { display: none !important; }
 .exam-tab:hover{background:var(--bg-subtle);color:var(--text-primary)}
 .exam-tab.is-active{background:var(--brand-500);color:#fff}
 
-/* ============ QUICK REPORT ============ */
 .quick-report {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -2605,6 +2615,42 @@ body.fs-locked .exam-shell {
 }
 
 /* ============================================================
+   37.b ATTEMPT TIMELINE (Event Details)
+   ============================================================ */
+.attempt-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: var(--sp-3);
+  background: var(--bg-subtle);
+  border-radius: var(--r-md);
+}
+
+.attempt-timeline-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border-radius: var(--r-sm);
+  border-inline-start: 3px solid var(--info-500);
+}
+.attempt-timeline-row.is-success { border-inline-start-color: var(--success-500); }
+.attempt-timeline-row.is-warning { border-inline-start-color: var(--warning-500); }
+.attempt-timeline-row.is-danger  { border-inline-start-color: var(--danger-500); }
+
+.attempt-timeline-time {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  flex-shrink: 0;
+  direction: ltr;
+}
+
+/* ============================================================
    38. RESPONSIVE
    ============================================================ */
 @media (max-width:768px){
@@ -2616,6 +2662,7 @@ body.fs-locked .exam-shell {
   .list-toolbar-actions{width:100%}
   .list-toolbar-actions .select,
   .list-toolbar-actions .btn{flex:1}
+  .attempt-details-modal { max-width: 100%; }
 }
 
 /* ============================================================
