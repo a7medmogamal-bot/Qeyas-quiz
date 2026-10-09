@@ -103,6 +103,19 @@ function gradeLabel(id) {
   return GRADE_LABELS[id] || id || "—";
 }
 
+function statusLabel(s) {
+  return {
+    draft: "مسودة",
+    scheduled: "مجدول",
+    active: "نشط",
+    completed: "مكتمل",
+    paused: "متوقف",
+    submitted: "تم التسليم",
+    graded: "تم التصحيح",
+    in_progress: "قيد الحل"
+  }[s] || s;
+}
+
 /* ============================================================
    UTILS
    ============================================================ */
@@ -938,18 +951,19 @@ function toggleTheme() {
 }
 
 /* ============================================================
-   AUTH STATE — Teacher + Student
+   AUTH STATE — Optimized
    ============================================================ */
 let authResolved = false;
 
 onAuthStateChanged(auth, async (user) => {
   currentUser = user;
 
-  // Not logged in
+  // ===== NOT LOGGED IN =====
   if (!user) {
     currentProfile = null;
     currentStudentProfile = null;
     clearProfileCache();
+    clearStudentCache();
     authResolved = true;
     hideGlobalLoading();
 
@@ -961,13 +975,20 @@ onAuthStateChanged(auth, async (user) => {
     return;
   }
 
-  // Logged in — try to load teacher profile from cache
-  const cached = getCachedProfile();
-  if (cached && cached.uid === user.uid && cached.role === "teacher") {
-    currentProfile = cached;
-    updateUserUI(cached, user);
+  // ===== LOGGED IN — instant UI from cache =====
+  const cachedTeacher = getCachedProfile();
+  const cachedStudent = getCachedStudentProfile();
+  const hasTeacherCache = cachedTeacher && cachedTeacher.uid === user.uid && cachedTeacher.role === "teacher";
+
+  if (hasTeacherCache) {
+    currentProfile = cachedTeacher;
+    currentStudentProfile = cachedStudent && cachedStudent.uid === user.uid ? cachedStudent : null;
+    authResolved = true;
+    hideGlobalLoading();
+    updateUserUI(currentProfile, user);
     resolveAuthRoute();
 
+    // Silent background refresh
     loadProfile(user.uid).then((fresh) => {
       if (fresh) {
         currentProfile = fresh;
@@ -978,20 +999,36 @@ onAuthStateChanged(auth, async (user) => {
         }
       }
     }).catch(() => {});
+
+    loadStudentProfile(user.uid).then((fresh) => {
+      if (fresh) {
+        currentStudentProfile = fresh;
+        cacheStudentProfile(fresh);
+      }
+    }).catch(() => {});
     return;
   }
 
-  // Try to load teacher profile from Firestore
-  try {
-    currentProfile = await loadProfile(user.uid);
-    if (currentProfile) cacheProfile(currentProfile);
-  } catch { currentProfile = null; }
+  // ===== FIRST LOGIN — fetch profiles (parallel) =====
+  const goingToApp = currentRoute && currentRoute.startsWith("/app/");
+  if (goingToApp) showGlobalLoading("جارٍ تحميل حسابك…");
 
-  // Load student profile (for exam entry)
   try {
-    currentStudentProfile = await loadStudentProfile(user.uid);
-    if (currentStudentProfile) cacheStudentProfile(currentStudentProfile);
-  } catch { currentStudentProfile = null; }
+    const [teacherProfile, studentProfile] = await Promise.all([
+      loadProfile(user.uid).catch(() => null),
+      loadStudentProfile(user.uid).catch(() => null)
+    ]);
+
+    currentProfile = teacherProfile;
+    currentStudentProfile = studentProfile;
+
+    if (teacherProfile) cacheProfile(teacherProfile);
+    if (studentProfile) cacheStudentProfile(studentProfile);
+  } catch (err) {
+    console.warn("[auth] load profiles failed", err);
+    currentProfile = null;
+    currentStudentProfile = null;
+  }
 
   authResolved = true;
   hideGlobalLoading();
@@ -1000,7 +1037,7 @@ onAuthStateChanged(auth, async (user) => {
 });
 
 function resolveAuthRoute() {
-  // Student-only routes
+  // Student / public routes — always allowed
   if (["/exam", "/result", "/", "/login"].includes(currentRoute)) {
     if (currentRoute && routeHandlers[currentRoute]) {
       Promise.resolve(routeHandlers[currentRoute](currentParams || new URLSearchParams())).catch(() => {});
@@ -1008,13 +1045,15 @@ function resolveAuthRoute() {
     return;
   }
 
-  // Teacher routes
   const hasProfile = currentProfile && currentProfile.username;
 
+  // No teacher profile → /setup
   if (!hasProfile && currentRoute !== "/setup") {
     navigate("/setup");
     return;
   }
+
+  // Has profile but on /setup → dashboard
   if (hasProfile && currentRoute === "/setup") {
     navigate("/app/dashboard");
     return;
@@ -1344,19 +1383,6 @@ function buildExamCard(exam) {
   return card;
 }
 
-function statusLabel(s) {
-  return {
-    draft: "مسودة",
-    scheduled: "مجدول",
-    active: "نشط",
-    completed: "مكتمل",
-    paused: "متوقف",
-    submitted: "تم التسليم",
-    graded: "تم التصحيح",
-    in_progress: "قيد الحل"
-  }[s] || s;
-}
-
 /* ============================================================
    MY EXAMS
    ============================================================ */
@@ -1364,7 +1390,6 @@ let examsState = { all: [], filtered: [], status: "", search: "" };
 
 async function renderMyExams() {
   const list = $("[data-exams-list]");
-  const empty = $("[data-exams-empty]");
   if (!list) return;
 
   list.innerHTML = "";
@@ -1633,7 +1658,6 @@ function buildQuestionCard(q, idx) {
   ta.addEventListener("input", () => { q.text = ta.value; markDirty(); });
   body.appendChild(ta);
 
-  // Image upload
   const imgField = el("div", { class: "field" });
   const imgRow = el("div", { class: "row" });
   const fileInput = el("input", { type: "file", accept: "image/*", hidden: "hidden" });
@@ -1668,7 +1692,6 @@ function buildQuestionCard(q, idx) {
   imgField.appendChild(imgRow);
   body.appendChild(imgField);
 
-  // MCQ / MCQ+Justification
   if (q.type === "mcq" || q.type === "mcq_just") {
     const opts = el("div", { class: "question-options" });
     (q.options || []).forEach((opt, i) => {
@@ -1722,7 +1745,6 @@ function buildQuestionCard(q, idx) {
     }
   }
 
-  // TF / TF+Justification
   if (q.type === "tf" || q.type === "tf_just") {
     const wrap = el("div", { class: "question-options" });
     [{ v: true, l: "صح" }, { v: false, l: "خطأ" }].forEach(({ v, l }) => {
@@ -1748,7 +1770,6 @@ function buildQuestionCard(q, idx) {
     }
   }
 
-  // Complete
   if (q.type === "complete") {
     const f = el("div", { class: "field" });
     f.appendChild(el("label", { class: "field-label", text: "الإجابة الصحيحة" }));
@@ -1758,7 +1779,6 @@ function buildQuestionCard(q, idx) {
     body.appendChild(f);
   }
 
-  // Essay
   if (q.type === "essay") {
     const f = el("div", { class: "field" });
     f.appendChild(el("label", { class: "field-label", text: "الإجابة النموذجية" }));
@@ -1769,7 +1789,6 @@ function buildQuestionCard(q, idx) {
     body.appendChild(f);
   }
 
-  // Score
   const scoreF = el("div", { class: "field" });
   scoreF.appendChild(el("label", { class: "field-label", text: "الدرجة" }));
   const scoreInp = el("input", {
@@ -2203,7 +2222,6 @@ async function renderExamDetails(params) {
   const actions = el("div", { class: "row" });
   actions.appendChild(el("span", { class: `badge badge-${status}`, text: statusLabel(status) }));
 
-  // Active/Paused toggle
   if (exam.publishedAt) {
     const toggleWrap = el("label", { class: "exam-status-toggle" });
     const toggleInput = el("input", { type: "checkbox" });
@@ -2246,7 +2264,6 @@ async function renderExamDetails(params) {
   head.appendChild(actions);
   host.appendChild(head);
 
-  // Leaderboard
   if (shouldShowLeaderboard(exam, attempts)) {
     host.appendChild(buildLeaderboard(exam, attempts));
   }
@@ -2685,7 +2702,6 @@ async function renderGrading(params) {
     const card = el("div", { class: "grading-card" });
     card.appendChild(el("div", { class: "grading-question", text: `س${i + 1} · ${q.text}` }));
 
-    // Student answer
     const ansBlock = el("div", { class: "grading-answer-block" });
     ansBlock.appendChild(el("div", { class: "answer-label" }, [
       svgIcon("user", 14),
@@ -2716,7 +2732,6 @@ async function renderGrading(params) {
     }
     card.appendChild(ansBlock);
 
-    // Correct answer
     if (q.type !== "essay") {
       const corBlock = el("div", { class: "grading-answer-block" });
       corBlock.appendChild(el("div", { class: "answer-label" }, [
@@ -2731,7 +2746,6 @@ async function renderGrading(params) {
       card.appendChild(corBlock);
     }
 
-    // Model answer (essay)
     if (q.type === "essay" && key.modelAnswer) {
       card.appendChild(el("div", { class: "answer-label" }, [
         svgIcon("book", 14),
@@ -2742,7 +2756,6 @@ async function renderGrading(params) {
       card.appendChild(modelBlock);
     }
 
-    // Justification model answer
     if ((q.type === "mcq_just" || q.type === "tf_just") && key.justificationModelAnswer) {
       card.appendChild(el("div", { class: "answer-label" }, [
         svgIcon("book", 14),
@@ -2753,7 +2766,6 @@ async function renderGrading(params) {
       card.appendChild(jBlock);
     }
 
-    // Score input
     if (isManual) {
       const scoreRow = el("div", { class: "grading-score-row" });
       scoreRow.appendChild(el("span", { class: "text-sm fw-semibold", text: "الدرجة:" }));
@@ -2946,7 +2958,6 @@ async function renderExam(params) {
     return;
   }
 
-  // Preview mode (teacher)
   if (preview && currentUser && currentProfile?.uid === exam.ownerId) {
     loading.hidden = true;
     shell.hidden = false;
@@ -2954,7 +2965,6 @@ async function renderExam(params) {
     return;
   }
 
-  // Draft
   if (!exam.publishedAt) {
     loading.hidden = true;
     errorBox.hidden = false;
@@ -2966,14 +2976,12 @@ async function renderExam(params) {
   const attempts = await listAttempts(examId);
   const status = computeStatus(exam);
 
-  // Leaderboard
   if (shouldShowLeaderboard(exam, attempts)) {
     loading.hidden = true;
     renderLeaderboardPage(exam, attempts);
     return;
   }
 
-  // Paused
   if (status === "paused") {
     loading.hidden = true;
     errorBox.hidden = false;
@@ -2982,7 +2990,6 @@ async function renderExam(params) {
     return;
   }
 
-  // Scheduled
   if (status === "scheduled") {
     loading.hidden = true;
     errorBox.hidden = false;
@@ -2991,7 +2998,6 @@ async function renderExam(params) {
     return;
   }
 
-  // Completed (not fully graded)
   if (status === "completed") {
     loading.hidden = true;
     errorBox.hidden = false;
@@ -3000,7 +3006,6 @@ async function renderExam(params) {
     return;
   }
 
-  // Check existing attempt for current user
   const currentU = auth.currentUser;
   if (currentU) {
     try {
@@ -3028,7 +3033,7 @@ async function renderExam(params) {
 }
 
 /* ============================================================
-   STUDENT ENTRY MODAL — 4 states
+   STUDENT ENTRY MODAL
    ============================================================ */
 let entryState = { exam: null, mode: "signed-out", attempt: null };
 
@@ -3076,13 +3081,11 @@ async function resolveEntryState() {
   const exam = entryState.exam;
   const user = auth.currentUser;
 
-  // Not signed in
   if (!user) {
     setEntryState("signed-out");
     return;
   }
 
-  // Check existing attempt
   const existingAttempt = await getStudentAttempt(exam.id, user.uid);
   if (existingAttempt) {
     entryState.attempt = existingAttempt;
@@ -3091,13 +3094,11 @@ async function resolveEntryState() {
     return;
   }
 
-  // Try cached student profile first
   const cachedStudent = getCachedStudentProfile();
   let studentProfile = null;
 
   if (cachedStudent && cachedStudent.uid === user.uid && cachedStudent.fullName) {
     studentProfile = cachedStudent;
-    // Background refresh
     loadStudentProfile(user.uid).then((fresh) => {
       if (fresh && fresh.fullName) cacheStudentProfile(fresh);
     }).catch(() => {});
@@ -3214,7 +3215,6 @@ function bindEntryHandlers() {
   if (!modal || modal.dataset.bound) return;
   modal.dataset.bound = "1";
 
-  // Google sign-in
   const googleBtn = $("[data-entry-google]");
   if (googleBtn) {
     googleBtn.addEventListener("click", async () => {
@@ -3230,7 +3230,6 @@ function bindEntryHandlers() {
     });
   }
 
-  // Save name
   const saveBtn = $("[data-entry-save-name]");
   if (saveBtn) {
     saveBtn.addEventListener("click", async () => {
@@ -3267,7 +3266,6 @@ function bindEntryHandlers() {
     });
   }
 
-  // Start exam
   const startBtn = $("[data-entry-start]");
   if (startBtn) {
     startBtn.addEventListener("click", async () => {
@@ -3275,7 +3273,6 @@ function bindEntryHandlers() {
       const user = auth.currentUser;
       if (!user) return;
 
-      // Access code check
       if (exam.requireAccessCode) {
         const codeInput = $("[data-entry-code]");
         const codeErr = $("[data-entry-code-error]");
@@ -3287,7 +3284,6 @@ function bindEntryHandlers() {
         codeErr.hidden = true;
       }
 
-      // Double-check
       const existing = await getStudentAttempt(exam.id, user.uid);
       if (existing) {
         entryState.attempt = existing;
@@ -3316,7 +3312,6 @@ function bindEntryHandlers() {
     });
   }
 
-  // View result
   const viewBtn = $("[data-entry-view-result]");
   if (viewBtn) {
     viewBtn.addEventListener("click", () => {
@@ -3436,7 +3431,6 @@ function startExamRuntime(exam, opts) {
     startHeartbeat();
     startAutosave();
     startAnticheat();
-    startViewportGuard();
     if (state.fsGuardActive) startFullscreenGuard();
 
     const initialMs = exam.updatedAt?.toMillis?.() || (exam.updatedAt?.seconds * 1000) || 0;
@@ -3767,7 +3761,7 @@ function startAnticheat() {
     $("[data-security-ok]").onclick = () => { modal.hidden = true; };
   }
 
-  // Tab visibility - 3 warnings
+  // 3 warnings on tab visibility change
   document.addEventListener("visibilitychange", () => {
     if (s.submitted || s.preview) return;
 
@@ -3896,55 +3890,6 @@ function startMovingWatermark() {
     lx = x; ly = y;
     wm.style.transform = `translate(${x}px, ${y}px)`;
   }, 3000);
-}
-
-/* ---- Viewport Guard ---- */
-function startViewportGuard() {
-  const s = examRuntime;
-  if (!s || s.preview) return;
-
-  const MIN_WARN_W = 900, MIN_WARN_H = 600;
-  const MIN_CRIT_W = 500, MIN_CRIT_H = 350;
-  let warningShown = false;
-
-  function checkViewport() {
-    if (s.submitted) return;
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-
-    if (w < MIN_CRIT_W || h < MIN_CRIT_H) {
-      const modal = $("[data-security-modal]");
-      if (modal && modal.hidden) {
-        $("[data-security-title]").textContent = "⚠️ الشاشة صغيرة جدًا";
-        $("[data-security-message]").textContent = "الامتحان يحتاج مساحة أكبر. كبّر النافذة.";
-        modal.hidden = false;
-        $("[data-security-ok]").onclick = () => { modal.hidden = true; };
-      }
-      return;
-    }
-
-    if (w < MIN_WARN_W || h < MIN_WARN_H) {
-      if (!warningShown) {
-        warningShown = true;
-        const modal = $("[data-security-modal]");
-        if (modal && modal.hidden) {
-          $("[data-security-title]").textContent = "تحذير: النافذة صغيرة";
-          $("[data-security-message]").textContent = "من فضلك كبّر النافذة.";
-          modal.hidden = false;
-          $("[data-security-ok]").onclick = () => { modal.hidden = true; };
-        }
-      }
-    } else {
-      warningShown = false;
-    }
-  }
-
-  const debouncedCheck = debounce(checkViewport, 500);
-  window.addEventListener("resize", debouncedCheck);
-  window.addEventListener("orientationchange", () => setTimeout(checkViewport, 400));
-  setTimeout(checkViewport, 1000);
-
-  s._viewportCleanup = () => { window.removeEventListener("resize", debouncedCheck); };
 }
 
 /* ---- Fullscreen Guard ---- */
@@ -4091,7 +4036,6 @@ async function performSubmit(kind = "manual", reason = null) {
   clearInterval(s.autosaveInterval);
   clearInterval(s.heartbeatInterval);
   if (s.watcherUnsub) { try { s.watcherUnsub(); } catch {} s.watcherUnsub = null; }
-  if (s._viewportCleanup) { try { s._viewportCleanup(); } catch {} }
   if (s._fsCleanup) { try { s._fsCleanup(); } catch {} }
 
   document.body.classList.remove("fs-locked");
@@ -4573,9 +4517,12 @@ window.addEventListener("offline", () => {
   initAntiCopy();
   bindEntryHandlers();
 
+  const hash = location.hash || "";
   const wasLoggedIn = localStorage.getItem(PROFILE_CACHE_KEY);
-  if (wasLoggedIn && location.hash.includes("/app/")) {
-    showGlobalLoading("جارٍ تحميل حسابك…");
+  const goingToApp = hash.includes("/app/") && !wasLoggedIn;
+
+  if (goingToApp) {
+    showGlobalLoading("جارٍ التحميل…");
   }
 
   handleRoute();
