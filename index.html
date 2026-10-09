@@ -66,6 +66,7 @@
 <symbol id="i-duplicate" viewBox="0 0 24 24"><rect x="3" y="3" width="13" height="13" rx="2"/><path d="M8 21h11a2 2 0 0 0 2-2V8"/></symbol>
 <symbol id="i-eye" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></symbol>
 <symbol id="i-save" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></symbol>
+<symbol id="i-save-all" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/><line x1="15" y1="6" x2="15" y2="10"/><line x1="13" y1="8" x2="17" y2="8"/></symbol>
 <symbol id="i-refresh" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></symbol>
 <symbol id="i-wifi-off" viewBox="0 0 24 24"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55M5 12.55a10.94 10.94 0 0 1 5.17-2.39M10.71 5.05A16 16 0 0 1 22.58 9M1.42 9a15.91 15.91 0 0 1 4.7-2.88M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"/></symbol>
 <symbol id="i-maximize" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></symbol>
@@ -79,6 +80,8 @@
 <symbol id="i-award" viewBox="0 0 24 24"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></symbol>
 <symbol id="i-inbox" viewBox="0 0 24 24"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
 <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
+<symbol id="i-trending-up" viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></symbol>
+<symbol id="i-trending-down" viewBox="0 0 24 24"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></symbol>
 </svg>
 
 <!-- ============================================================
@@ -621,6 +624,10 @@
                 <span class="builder-save text-xs text-muted" data-builder-save-state></span>
               </div>
               <div class="builder-head-right">
+                <button type="button" class="btn btn-success btn-sm" data-builder-save-all>
+                  <svg class="icon" width="14" height="14"><use href="#i-save-all"></use></svg>
+                  <span data-i18n="action.saveAll">حفظ الكل</span>
+                </button>
                 <button type="button" class="btn btn-ghost btn-sm" data-builder-cancel data-i18n="action.cancel">إلغاء</button>
                 <button type="button" class="btn btn-outline btn-sm" data-builder-preview data-i18n="action.preview">معاينة</button>
               </div>
@@ -691,7 +698,10 @@
             <section class="builder-panel" data-panel="questions" hidden>
               <div class="card">
                 <header class="builder-panel-head">
-                  <h3 class="builder-panel-title" data-i18n="builder.questions.title">الأسئلة</h3>
+                  <div>
+                    <h3 class="builder-panel-title" data-i18n="builder.questions.title">الأسئلة</h3>
+                    <p class="field-hint" data-i18n="builder.questions.hint">كل سؤال له زرار حفظ خاص. لازم تحفظ كل سؤال بعد التعديل عليه.</p>
+                  </div>
                   <div class="row">
                     <span class="text-sm text-muted" data-i18n="builder.questions.total">الدرجة الكلية:</span>
                     <span class="fw-bold" data-total-score>0</span>
@@ -980,7 +990,10 @@
       <div class="exam-error-icon"><svg class="icon" width="32" height="32"><use href="#i-alert"></use></svg></div>
       <h2 data-exam-error-title></h2>
       <p data-exam-error-message></p>
-      <a href="#/" class="btn btn-primary" data-i18n="action.goHome">الرئيسية</a>
+      <button type="button" class="btn btn-primary" data-refresh-page>
+        <svg class="icon" width="18" height="18"><use href="#i-refresh"></use></svg>
+        <span data-i18n="action.refresh">تحديث</span>
+      </button>
     </div>
   </div>
 
@@ -1298,7 +1311,10 @@
       <div class="result-review" data-result-review></div>
 
       <div class="result-actions">
-        <a href="#/" class="btn btn-primary" data-i18n="action.goHome">الرئيسية</a>
+        <button type="button" class="btn btn-primary" data-refresh-page>
+          <svg class="icon" width="18" height="18"><use href="#i-refresh"></use></svg>
+          <span data-i18n="action.refresh">تحديث</span>
+        </button>
       </div>
     </div>
   </main>
