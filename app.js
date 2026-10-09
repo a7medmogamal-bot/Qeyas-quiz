@@ -1037,28 +1037,55 @@ onAuthStateChanged(auth, async (user) => {
 });
 
 function resolveAuthRoute() {
-  // Student / public routes — always allowed
-  if (["/exam", "/result", "/", "/login"].includes(currentRoute)) {
-    if (currentRoute && routeHandlers[currentRoute]) {
-      Promise.resolve(routeHandlers[currentRoute](currentParams || new URLSearchParams())).catch(() => {});
+  const hasTeacherProfile = currentProfile && currentProfile.username;
+
+  // ===== Pages that don't require teacher profile =====
+  const isStudentOrPublic = ["/exam", "/result", "/"].includes(currentRoute);
+
+  // ===== NOT logged in — handled in onAuthStateChanged =====
+  if (!currentUser) {
+    if (isStudentOrPublic || currentRoute === "/login") {
+      if (currentRoute && routeHandlers[currentRoute]) {
+        Promise.resolve(routeHandlers[currentRoute](currentParams || new URLSearchParams())).catch(() => {});
+      }
+      return;
     }
+    navigate("/login");
     return;
   }
 
-  const hasProfile = currentProfile && currentProfile.username;
+  // ===== LOGGED IN, but no teacher profile =====
+  if (!hasTeacherProfile) {
+    // Student/public pages → OK
+    if (isStudentOrPublic) {
+      if (currentRoute && routeHandlers[currentRoute]) {
+        Promise.resolve(routeHandlers[currentRoute](currentParams || new URLSearchParams())).catch(() => {});
+      }
+      return;
+    }
 
-  // No teacher profile → /setup
-  if (!hasProfile && currentRoute !== "/setup") {
+    // Already on setup → run it
+    if (currentRoute === "/setup") {
+      if (routeHandlers[currentRoute]) {
+        Promise.resolve(routeHandlers[currentRoute](currentParams || new URLSearchParams())).catch(() => {});
+      }
+      return;
+    }
+
+    // Anywhere else → go to setup
     navigate("/setup");
     return;
   }
 
-  // Has profile but on /setup → dashboard
-  if (hasProfile && currentRoute === "/setup") {
+  // ===== LOGGED IN with teacher profile =====
+
+  // On login or setup → dashboard
+  if (currentRoute === "/login" || currentRoute === "/setup") {
     navigate("/app/dashboard");
     return;
   }
 
+  // Run current route handler
   if (currentRoute && routeHandlers[currentRoute]) {
     Promise.resolve(routeHandlers[currentRoute](currentParams || new URLSearchParams())).catch(() => {});
   }
@@ -3761,7 +3788,6 @@ function startAnticheat() {
     $("[data-security-ok]").onclick = () => { modal.hidden = true; };
   }
 
-  // 3 warnings on tab visibility change
   document.addEventListener("visibilitychange", () => {
     if (s.submitted || s.preview) return;
 
@@ -3797,7 +3823,6 @@ function startAnticheat() {
     }
   });
 
-  // Block copy/cut/context menu inside exam
   document.addEventListener("copy", (e) => {
     if (s.submitted || s.preview) return;
     const target = e.target;
