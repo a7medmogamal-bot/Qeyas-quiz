@@ -13,22 +13,16 @@ async function loadConfig() {
     const res = await fetch("/api/config");
     if (!res.ok) throw new Error("config fetch failed");
     APP_CONFIG = await res.json();
+    if (!APP_CONFIG?.firebase?.apiKey) throw new Error("missing firebase config");
+    if (!APP_CONFIG?.cloudinary?.cloudName) throw new Error("missing cloudinary config");
   } catch (err) {
-    console.warn("[config] fallback to hardcoded");
-    APP_CONFIG = {
-      firebase: {
-        apiKey: "AIzaSyAIPCI0ZaBabAQQAvT1CSh_Bt3HMPtx_VU",
-        authDomain: "qeyasquiz.firebaseapp.com",
-        projectId: "qeyasquiz",
-        storageBucket: "qeyasquiz.firebasestorage.app",
-        messagingSenderId: "918583547137",
-        appId: "1:918583547137:web:78cef6533e33cd7e8ab700"
-      },
-      cloudinary: {
-        cloudName: "di5z4lzwv",
-        uploadPreset: "qeyasquiz_upload"
-      }
-    };
+    console.error("[config] failed:", err);
+    document.body.innerHTML = `
+      <div style="padding:40px;text-align:center;font-family:'IBM Plex Sans Arabic',sans-serif;direction:rtl">
+        <h1 style="margin-bottom:16px">خطأ في إعداد التطبيق</h1>
+        <p style="color:#666">تعذّر تحميل الإعدادات. يرجى تحديث الصفحة، وإذا استمر الخطأ تواصل مع الدعم.</p>
+      </div>`;
+    throw err;
   }
   return APP_CONFIG;
 }
@@ -704,12 +698,15 @@ async function saveStudentProfile(uid, fullName) {
     role: "student",
     updatedAt: serverTimestamp()
   };
-  try {
+
+  const snap = await getDoc(studentRef);
+  if (snap.exists()) {
     await updateDoc(studentRef, payload);
-  } catch {
+  } else {
     payload.createdAt = serverTimestamp();
     await setDoc(studentRef, payload);
   }
+
   const profile = { uid, fullName: fullName.trim(), email: user?.email || "", role: "student" };
   cacheStudentProfile(profile);
   return profile;
@@ -891,6 +888,14 @@ function navigate(path) {
 }
 
 function handleRoute() {
+  // Cleanup exam runtime listeners when leaving /exam
+  const rawNext = (location.hash.replace(/^#/, "")) || "/";
+  const [nextPath] = rawNext.split("?");
+  if (examRuntime && examRuntime.watcherUnsub && nextPath !== "/exam") {
+    try { examRuntime.watcherUnsub(); } catch {}
+    examRuntime.watcherUnsub = null;
+  }
+
   const raw = (location.hash.replace(/^#/, "")) || "/";
   const [path, qs] = raw.split("?");
   const params = new URLSearchParams(qs || "");
@@ -974,7 +979,6 @@ onAuthStateChanged(auth, async (user) => {
     return;
   }
 
-  // ===== LOGGED IN — instant UI from cache =====
   const cachedTeacher = getCachedProfile();
   const cachedStudent = getCachedStudentProfile();
   const hasTeacherCache = cachedTeacher && cachedTeacher.uid === user.uid && cachedTeacher.role === "teacher";
@@ -1007,7 +1011,6 @@ onAuthStateChanged(auth, async (user) => {
     return;
   }
 
-  // ===== FIRST LOGIN — fetch profiles (parallel) =====
   const goingToApp = currentRoute && currentRoute.startsWith("/app/");
   if (goingToApp) showGlobalLoading("جارٍ تحميل حسابك…");
 
@@ -1299,7 +1302,13 @@ function initSetup() {
           photoURL = await uploadAvatar(currentUser.uid, setupState.photoFile);
         } catch (err) {
           console.warn(err);
-          toast("تعذّر رفع الصورة — سيتم استخدام صورة Google", "warning");
+          const msgs = {
+            NO_FILE: "لم يتم اختيار ملف",
+            INVALID_TYPE: "صيغة الصورة غير مدعومة — JPG / PNG / WebP فقط",
+            TOO_LARGE: "حجم الصورة أكبر من 2 ميجابايت",
+            UPLOAD_FAILED: "فشل الاتصال بـ Cloudinary — تحقق من الإعدادات",
+          };
+          toast(msgs[err.message] || "تعذّر رفع الصورة — سيتم استخدام صورة Google", "warning", 6000);
         }
       }
 
@@ -1647,18 +1656,15 @@ function buildQuestionCard(q, idx) {
   const card = el("div", { class: "question-card" });
   card.dataset.qid = q.id;
 
-  // ===== STATUS BAR =====
   const statusBar = el("div", { class: "q-status-bar" });
   card.appendChild(statusBar);
 
-  // Set initial status
   function updateCardStatus() {
     if (q._saved === true) card.dataset.status = "saved";
     else if (q._error) card.dataset.status = "error";
     else card.dataset.status = "unsaved";
   }
 
-  // ===== HEAD =====
   const head = el("div", { class: "question-card-head" });
   const numWrap = el("div", { class: "question-card-num" });
   numWrap.appendChild(el("span", { text: String(idx + 1) }));
@@ -1679,7 +1685,6 @@ function buildQuestionCard(q, idx) {
   head.appendChild(actions);
   card.appendChild(head);
 
-  // ===== SAVE ROW =====
   const saveRow = el("div", { class: "q-save-row" });
   const saveBtn = el("button", { type: "button", class: "btn btn-sm" });
 
@@ -1726,7 +1731,10 @@ function buildQuestionCard(q, idx) {
       console.error("[saveQuestion]", err);
       q._error = true;
       updateCardStatus();
-      toast("فشل حفظ السؤال", "error");
+      const reason = err?.message === "Could not create exam"
+        ? "تعذّر إنشاء مسودة الامتحان — جرب تحفظ الكل أولاً"
+        : err?.message || "خطأ في الشبكة";
+      toast(`فشل حفظ السؤال ${idx + 1}: ${reason}`, "error", 6000);
     } finally {
       saveBtn.classList.remove("is-loading");
     }
@@ -1736,7 +1744,6 @@ function buildQuestionCard(q, idx) {
   saveRow.appendChild(saveBtn);
   card.appendChild(saveRow);
 
-  // ===== BODY =====
   const body = el("div", { class: "question-body" });
 
   const ta = el("textarea", { class: "textarea" });
@@ -1749,7 +1756,6 @@ function buildQuestionCard(q, idx) {
   });
   body.appendChild(ta);
 
-  // Image
   const imgField = el("div", { class: "field" });
   const imgRow = el("div", { class: "row" });
   const fileInput = el("input", { type: "file", accept: "image/*", hidden: "hidden" });
@@ -1765,7 +1771,13 @@ function buildQuestionCard(q, idx) {
       markDirty();
     } catch (err) {
       console.error(err);
-      toast("تعذّر رفع الصورة", "error");
+      const msgs = {
+        NO_FILE: "لم يتم اختيار ملف",
+        INVALID_TYPE: "صيغة الصورة غير مدعومة — JPG / PNG / WebP فقط",
+        TOO_LARGE: "حجم الصورة أكبر من 5 ميجابايت",
+        UPLOAD_FAILED: "فشل الاتصال بـ Cloudinary — تحقق من الإعدادات",
+      };
+      toast(msgs[err.message] || `تعذّر رفع الصورة (${err.message || "خطأ غير معروف"})`, "error", 6000);
     }
   });
   const uploadBtn = el("button", { class: "btn btn-outline btn-sm", type: "button" });
@@ -1790,7 +1802,6 @@ function buildQuestionCard(q, idx) {
   imgField.appendChild(imgRow);
   body.appendChild(imgField);
 
-  // MCQ
   if (q.type === "mcq" || q.type === "mcq_just") {
     const opts = el("div", { class: "question-options" });
     (q.options || []).forEach((opt, i) => {
@@ -1858,7 +1869,6 @@ function buildQuestionCard(q, idx) {
     }
   }
 
-  // TF
   if (q.type === "tf" || q.type === "tf_just") {
     const wrap = el("div", { class: "question-options" });
     [{ v: true, l: "صح" }, { v: false, l: "خطأ" }].forEach(({ v, l }) => {
@@ -1892,7 +1902,6 @@ function buildQuestionCard(q, idx) {
     }
   }
 
-  // Complete
   if (q.type === "complete") {
     const f = el("div", { class: "field" });
     f.appendChild(el("label", { class: "field-label", text: "الإجابة الصحيحة" }));
@@ -1906,7 +1915,6 @@ function buildQuestionCard(q, idx) {
     body.appendChild(f);
   }
 
-  // Essay
   if (q.type === "essay") {
     const f = el("div", { class: "field" });
     f.appendChild(el("label", { class: "field-label", text: "الإجابة النموذجية" }));
@@ -1921,7 +1929,6 @@ function buildQuestionCard(q, idx) {
     body.appendChild(f);
   }
 
-  // Score
   const scoreF = el("div", { class: "field" });
   scoreF.appendChild(el("label", { class: "field-label", text: "الدرجة" }));
   const scoreInp = el("input", {
@@ -2006,7 +2013,6 @@ async function saveSingleQuestion(q) {
     });
   });
 
-  // Also save the question text to exam doc
   const examRef = doc(db, "exams", builderState.examId);
   const cleanForms = builderState.data.forms.map((form) => ({
     id: form.id,
@@ -2103,7 +2109,6 @@ async function autosaveBuilderNow() {
 
   if (builderState.examId) {
     await updateDoc(doc(db, "exams", builderState.examId), examPayload);
-    // Merge answers instead of overwriting
     const answersRef = doc(db, "examAnswers", builderState.examId);
     await runTransaction(db, async (tx) => {
       const snap = await tx.get(answersRef);
@@ -2368,7 +2373,6 @@ async function saveAllQuestions() {
     return;
   }
 
-  // Save answers for all questions using transaction
   const answerKey = {};
   allQ.forEach((q) => {
     const a = {};
@@ -2395,7 +2399,6 @@ async function saveAllQuestions() {
     });
   });
 
-  // Mark all as saved
   allQ.forEach((q) => { q._saved = true; q._error = false; });
   renderBuilderQuestions();
   toast(`تم حفظ ${allQ.length} سؤال`, "success");
@@ -2410,7 +2413,6 @@ async function publishExam() {
   const totalQ = getAllBuilderQuestions().length;
   if (!totalQ) errors.push("أضف سؤالاً واحدًا على الأقل");
 
-  // Check all questions are saved
   const unsaved = getAllBuilderQuestions().filter((q) => !q._saved);
   if (unsaved.length) {
     errors.push(`فيه ${unsaved.length} سؤال مش محفوظ. اضغط "حفظ الكل" الأول.`);
@@ -2466,7 +2468,10 @@ async function publishExam() {
           navigate(`/app/exam?id=${builderState.examId}`);
         } catch (err) {
           console.error(err);
-          toast("فشل النشر", "error");
+          const reason = err?.code === "permission-denied"
+            ? "ليس لديك صلاحية — أعد تسجيل الدخول"
+            : err?.message || "خطأ في الشبكة";
+          toast(`فشل النشر: ${reason}`, "error", 6000);
         }
       }}
     ]
@@ -2570,7 +2575,7 @@ function initBuilderEvents() {
    EXAM DETAILS + QUICK REPORT
    ============================================================ */
 async function renderExamDetails(params) {
-  const examId = params?.get("id");
+  const examId = params?.get("id") || currentParams?.get("id");
   const host = $("[data-exam-details]");
   if (!host) return;
   if (!examId) { navigate("/app/exams"); return; }
@@ -2584,12 +2589,18 @@ async function renderExamDetails(params) {
     return;
   }
 
-  try {
-    const graded = await autoGradeAttempts(examId, exam);
-    if (graded > 0) toast(`تم تصحيح ${graded} ورقة`, "success");
-  } catch (err) { console.warn(err); }
+  // Auto-grade only if there are ungraded submitted attempts
+  let attemptsPre = await listAttempts(examId);
+  const hasUngraded = attemptsPre.some((a) => !a.gradedAt && a.status === "submitted");
+  if (hasUngraded) {
+    try {
+      const graded = await autoGradeAttempts(examId, exam);
+      if (graded > 0) toast(`تم تصحيح ${graded} ورقة`, "success");
+      attemptsPre = await listAttempts(examId);
+    } catch (err) { console.warn(err); }
+  }
 
-  const attempts = await listAttempts(examId);
+  const attempts = attemptsPre;
   const status = computeStatus(exam);
 
   host.innerHTML = "";
@@ -2618,7 +2629,7 @@ async function renderExamDetails(params) {
           updatedAt: serverTimestamp()
         });
         toast(newStatus === "active" ? "تم تفعيل الامتحان" : "تم إيقاف الامتحان", "success");
-        renderExamDetails(params);
+        renderExamDetails(currentParams);
       } catch (err) {
         console.error(err);
         toast("تعذّر التحديث", "error");
@@ -2648,7 +2659,6 @@ async function renderExamDetails(params) {
   head.appendChild(actions);
   host.appendChild(head);
 
-  // ===== QUICK REPORT =====
   if (attempts.length) {
     host.appendChild(buildQuickReport(exam, attempts));
   }
@@ -2683,7 +2693,7 @@ async function renderExamDetails(params) {
   showTab("students");
 }
 
-function buildQuickReport(exam, attempts) {
+async function buildQuickReport(exam, attempts) {
   const totalPossible = exam.totalScore || 0;
   const graded = attempts.filter((a) => a.gradedAt && a.score != null);
   const submitted = attempts.filter((a) => a.status === "submitted" || a.status === "graded");
@@ -2691,7 +2701,6 @@ function buildQuickReport(exam, attempts) {
 
   const report = el("div", { class: "quick-report" });
 
-  // Participants
   const participantsItem = el("div", { class: "quick-report-item is-info" });
   participantsItem.appendChild(el("span", { class: "quick-report-label", text: "المشاركون" }));
   participantsItem.appendChild(el("span", { class: "quick-report-value", text: String(attempts.length) }));
@@ -2702,7 +2711,6 @@ function buildQuickReport(exam, attempts) {
   report.appendChild(participantsItem);
 
   if (graded.length) {
-    // Average
     const avg = Math.round(graded.reduce((s, a) => s + (Number(a.score) || 0), 0) / graded.length);
     const avgPct = totalPossible ? Math.round((avg / totalPossible) * 100) : 0;
     const avgItem = el("div", { class: "quick-report-item is-success" });
@@ -2717,7 +2725,6 @@ function buildQuickReport(exam, attempts) {
     }));
     report.appendChild(avgItem);
 
-    // Highest
     const highest = graded.reduce((best, a) =>
       (Number(a.score) || 0) > (Number(best.score) || 0) ? a : best
     , graded[0]);
@@ -2733,7 +2740,6 @@ function buildQuickReport(exam, attempts) {
     }));
     report.appendChild(highItem);
 
-    // Lowest
     const lowest = graded.reduce((worst, a) =>
       (Number(a.score) || 0) < (Number(worst.score) || 0) ? a : worst
     , graded[0]);
@@ -2749,21 +2755,59 @@ function buildQuickReport(exam, attempts) {
     }));
     report.appendChild(lowItem);
 
-    // Hardest questions
+    // Hardest questions analysis
     const allQuestions = getAllExamQuestions(exam);
     if (allQuestions.length && graded.length > 0) {
+      const answersMap = await getExamAnswers(exam.id);
       const stats = allQuestions.map((q) => {
         let correctCount = 0;
+        let attemptedCount = 0;
+        const key = answersMap[q.id] || {};
+
         graded.forEach((a) => {
           const ans = (a.answers || {})[q.id] || {};
-          const key = null;
-          if (q.type === "mcq" && ans.selectedIndex != null) {
-            // Compare with examAnswers — but we don't have it here
-            // Skip precise comparison
+          if (q.type === "mcq" || q.type === "mcq_just") {
+            if (ans.selectedIndex != null) {
+              attemptedCount++;
+              if (ans.selectedIndex === key.correctIndex) correctCount++;
+            }
+          } else if (q.type === "tf" || q.type === "tf_just") {
+            if (ans.boolValue != null) {
+              attemptedCount++;
+              if (ans.boolValue === key.correctBool) correctCount++;
+            }
+          } else if (q.type === "complete") {
+            const norm = (v) => String(v || "").trim().toLowerCase();
+            if (ans.textValue && ans.textValue.trim()) {
+              attemptedCount++;
+              if (norm(ans.textValue) === norm(key.correctText)) correctCount++;
+            }
           }
         });
-        return { q, correctCount };
+
+        const successRate = attemptedCount ? (correctCount / attemptedCount) : 1;
+        return { q, correctCount, attemptedCount, successRate };
       });
+
+      const hardest = stats
+        .filter((s) => s.attemptedCount > 0)
+        .sort((a, b) => a.successRate - b.successRate)
+        .slice(0, 3);
+
+      if (hardest.length && hardest[0].successRate < 0.5) {
+        const hardItem = el("div", { class: "quick-report-item is-warning" });
+        hardItem.appendChild(el("span", { class: "quick-report-label", text: "أصعب سؤال" }));
+        hardItem.appendChild(el("span", {
+          class: "quick-report-value is-small",
+          text: `س${allQuestions.indexOf(hardest[0].q) + 1}`
+        }));
+        const pct = Math.round(hardest[0].successRate * 100);
+        hardItem.appendChild(el("span", {
+          class: "quick-report-sub",
+          text: `${pct}% إجابة صحيحة`
+        }));
+        report.appendChild(hardItem);
+      }
     }
   }
 
@@ -2778,7 +2822,8 @@ function renderStudentsTab(host, exam, attempts) {
     ]));
     return;
   }
-  const wrap = el("div", { class: "card" });
+
+  const wrap = el("div", { class: "card", style: "overflow-x:auto" });
   const table = el("table", { class: "students-table" });
   table.innerHTML = `<thead><tr>
     <th>الطالب</th>
@@ -2786,6 +2831,8 @@ function renderStudentsTab(host, exam, attempts) {
     <th>البدء</th>
     <th>التسليم</th>
     <th>الدرجة</th>
+    <th>الأحداث</th>
+    <th>التفاصيل</th>
   </tr></thead>`;
   const tbody = el("tbody");
   const totalPossible = exam.totalScore || 0;
@@ -2793,10 +2840,48 @@ function renderStudentsTab(host, exam, attempts) {
   attempts.forEach((a) => {
     const tr = el("tr", { style: "cursor:pointer" });
     tr.appendChild(el("td", { text: a.studentName || "—" }));
-    tr.appendChild(el("td", {}, [el("span", { class: `badge badge-${a.status || "draft"}`, text: statusLabel(a.status || "draft") })]));
+    tr.appendChild(el("td", {}, [
+      el("span", { class: `badge badge-${a.status || "draft"}`, text: statusLabel(a.status || "draft") })
+    ]));
     tr.appendChild(el("td", { text: fmtDate(a.startedAt) }));
     tr.appendChild(el("td", { text: a.submittedAt ? fmtDate(a.submittedAt) : "—" }));
     tr.appendChild(el("td", { text: a.score != null ? `${a.score} / ${totalPossible}` : "—" }));
+
+    // Events column
+    const eventsCount = (a.anticheatEvents || []).length;
+    const warningsCount = (a.anticheatEvents || []).filter(
+      (e) => e.type === "tab_hidden" || e.type === "window_blur" || e.type === "fullscreen_exit"
+    ).length;
+    const eventsTd = el("td");
+    if (eventsCount === 0) {
+      eventsTd.appendChild(el("span", { class: "badge badge-graded", text: "نظيف" }));
+    } else {
+      const badgeClass = warningsCount >= 3 ? "badge-paused"
+        : warningsCount > 0 ? "badge-in_progress"
+        : "badge-draft";
+      eventsTd.appendChild(el("span", {
+        class: `badge ${badgeClass}`,
+        text: `${eventsCount} حدث`
+      }));
+    }
+    tr.appendChild(eventsTd);
+
+    // Details column
+    const detailsTd = el("td");
+    const detailsBtn = el("button", {
+      type: "button",
+      class: "btn btn-ghost btn-xs",
+      title: "عرض تفاصيل الجلسة"
+    });
+    detailsBtn.appendChild(svgIcon("eye", 14));
+    detailsBtn.appendChild(document.createTextNode(" تفاصيل"));
+    detailsBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openAttemptDetails(a, exam);
+    });
+    detailsTd.appendChild(detailsBtn);
+    tr.appendChild(detailsTd);
+
     tr.addEventListener("click", () => navigate(`/app/grading?exam=${exam.id}&attempt=${a.id}`));
     tbody.appendChild(tr);
   });
@@ -2850,6 +2935,162 @@ function renderGradingList(host, exam, attempts) {
     wrap.appendChild(row);
   });
   host.appendChild(wrap);
+}
+
+/* ============================================================
+   ATTEMPT DETAILS — Timeline + Anti-cheat
+   ============================================================ */
+const EVENT_LABELS = {
+  tab_hidden:       { label: "خرج من الصفحة",          color: "warning" },
+  tab_visible:      { label: "رجع للصفحة",             color: "success" },
+  window_blur:      { label: "خرج من النافذة",         color: "warning" },
+  window_focus:     { label: "رجع للنافذة",            color: "success" },
+  copy_attempt:     { label: "محاولة نسخ",             color: "danger"  },
+  cut_attempt:      { label: "محاولة قص",              color: "danger"  },
+  paste_blocked:    { label: "محاولة لصق (مرفوضة)",     color: "danger"  },
+  context_menu:     { label: "فتح القائمة اليمنى",      color: "warning" },
+  fullscreen_exit:  { label: "خرج من ملء الشاشة",      color: "danger"  },
+  devtools_attempt: { label: "محاولة فتح DevTools",     color: "danger"  },
+  devtools_open:    { label: "DevTools مفتوحة",        color: "danger"  },
+  shortcut_c:       { label: "اختصار نسخ (Ctrl+C)",    color: "warning" },
+  shortcut_x:       { label: "اختصار قص (Ctrl+X)",     color: "warning" },
+  shortcut_a:       { label: "اختصار تحديد الكل",       color: "warning" },
+  shortcut_s:       { label: "اختصار حفظ الصفحة",       color: "warning" },
+  shortcut_p:       { label: "اختصار طباعة",           color: "warning" },
+  shortcut_u:       { label: "اختصار عرض المصدر",       color: "warning" },
+  offline:          { label: "انقطع الاتصال",          color: "warning" },
+  online:           { label: "عاد الاتصال",           color: "success" },
+};
+
+function openAttemptDetails(attempt, exam) {
+  const events = (attempt.anticheatEvents || []).slice().sort((a, b) => (a.at || 0) - (b.at || 0));
+
+  const count = (type) => events.filter((e) => e.type === type).length;
+  const stats = {
+    tabSwitches: count("tab_hidden"),
+    windowBlurs: count("window_blur"),
+    copyAttempts: count("copy_attempt") + count("cut_attempt"),
+    pasteAttempts: count("paste_blocked"),
+    contextMenu: count("context_menu"),
+    fsExits: count("fullscreen_exit"),
+    devtools: count("devtools_attempt") + count("devtools_open"),
+    shortcuts: events.filter((e) => (e.type || "").startsWith("shortcut_")).length,
+    offline: count("offline"),
+  };
+
+  const totalSuspicious =
+    stats.tabSwitches + stats.windowBlurs + stats.copyAttempts +
+    stats.pasteAttempts + stats.fsExits + stats.devtools + stats.shortcuts;
+
+  const body = el("div", { class: "stack" });
+
+  const info = el("div", { class: "card", style: "background:var(--bg-subtle)" });
+  const totalPossible = exam.totalScore || 0;
+  [
+    ["الطالب", attempt.studentName || "—"],
+    ["الحالة", statusLabel(attempt.status || "draft")],
+    ["البدء", fmtDate(attempt.startedAt)],
+    ["التسليم", attempt.submittedAt ? fmtDate(attempt.submittedAt) : "—"],
+    ["الدرجة", attempt.score != null ? `${attempt.score} / ${totalPossible}` : "—"],
+  ].forEach(([k, v]) => {
+    info.appendChild(el("div", { class: "row-between", style: "padding:6px 0" }, [
+      el("span", { class: "text-sm text-muted", text: k }),
+      el("span", { class: "text-sm fw-semibold", text: v }),
+    ]));
+  });
+  body.appendChild(info);
+
+  let verdictText = "لم يتم رصد أي نشاط مريب.";
+  let verdictClass = "is-success";
+  if (totalSuspicious >= 10) {
+    verdictText = "نشاط مريب كثيف — يُنصح بمراجعة الإجابات يدويًا.";
+    verdictClass = "is-danger";
+  } else if (totalSuspicious >= 4) {
+    verdictText = "نشاط مريب ملحوظ — راجع التفاصيل.";
+    verdictClass = "is-warning";
+  } else if (totalSuspicious > 0) {
+    verdictText = "نشاط بسيط تم رصده.";
+    verdictClass = "is-info";
+  }
+
+  const verdict = el("div", {
+    class: `quick-report-item ${verdictClass}`,
+    style: "padding:var(--sp-4);border-radius:var(--r-md)"
+  });
+  verdict.appendChild(el("div", { class: "fw-semibold", text: verdictText }));
+  body.appendChild(verdict);
+
+  const statsGrid = el("div", { class: "quick-report" });
+  const statItems = [
+    ["تبديل تاب", stats.tabSwitches, "is-warning"],
+    ["خروج من النافذة", stats.windowBlurs, "is-warning"],
+    ["نسخ / قص", stats.copyAttempts, "is-danger"],
+    ["لصق مرفوض", stats.pasteAttempts, "is-danger"],
+    ["خروج من ملء الشاشة", stats.fsExits, "is-danger"],
+    ["DevTools", stats.devtools, "is-danger"],
+    ["اختصارات", stats.shortcuts, "is-warning"],
+    ["انقطاع نت", stats.offline, "is-info"],
+  ];
+  statItems.forEach(([label, value, cls]) => {
+    const item = el("div", { class: `quick-report-item ${value > 0 ? cls : ""}` });
+    item.appendChild(el("span", { class: "quick-report-label", text: label }));
+    item.appendChild(el("span", { class: "quick-report-value", text: String(value) }));
+    statsGrid.appendChild(item);
+  });
+  body.appendChild(statsGrid);
+
+  const timelineHeader = el("div", {
+    class: "builder-panel-title",
+    style: "display:flex;align-items:center;gap:8px;margin-top:var(--sp-4)"
+  });
+  timelineHeader.appendChild(svgIcon("clock", 18));
+  timelineHeader.appendChild(document.createTextNode(`الخط الزمني (${events.length} حدث)`));
+  body.appendChild(timelineHeader);
+
+  if (!events.length) {
+    body.appendChild(el("div", { class: "empty", style: "padding:var(--sp-6)" }, [
+      el("p", { class: "text-muted", text: "لا توجد أحداث مسجلة لهذه المحاولة." })
+    ]));
+  } else {
+    const timeline = el("div", { class: "attempt-timeline" });
+
+    events.forEach((evt) => {
+      const meta = EVENT_LABELS[evt.type] || { label: evt.type, color: "info" };
+      const row = el("div", { class: `attempt-timeline-row is-${meta.color}` });
+
+      const left = el("div", { style: "display:flex;align-items:center;gap:10px;min-width:0" });
+      const text = el("div", { style: "min-width:0" });
+      text.appendChild(el("div", { class: "text-sm fw-semibold", text: meta.label }));
+      if (evt.count != null) {
+        text.appendChild(el("div", { class: "text-xs text-muted", text: `المرة ${evt.count}` }));
+      }
+      left.appendChild(text);
+      row.appendChild(left);
+
+      const time = new Date(evt.at || 0).toLocaleTimeString("ar-EG", {
+        hour: "2-digit", minute: "2-digit", second: "2-digit"
+      });
+      row.appendChild(el("span", { class: "attempt-timeline-time", text: time }));
+
+      timeline.appendChild(row);
+    });
+
+    body.appendChild(timeline);
+  }
+
+  openModal({
+    title: `تفاصيل جلسة — ${attempt.studentName || "طالب"}`,
+    body,
+    className: "attempt-details-modal",
+    actions: [
+      { label: "إغلاق", class: "btn-ghost" },
+      {
+        label: "تصحيح الورقة",
+        class: "btn-primary",
+        onClick: () => navigate(`/app/grading?exam=${exam.id}&attempt=${attempt.id}`)
+      }
+    ]
+  });
 }
 
 /* ============================================================
@@ -2977,7 +3218,7 @@ function buildLeaderboard(exam, attempts) {
   }
 
   const podium = el("div", { class: "leaderboard-podium" });
-  const medals = ["🥇", "🥈", "🥉"];
+  const medals = ["1", "2", "3"];
   [1, 0, 2].forEach((idx) => {
     const a = ranked[idx];
     if (!a) { podium.appendChild(el("div")); return; }
@@ -3027,7 +3268,6 @@ function renderLeaderboardPage(exam, attempts) {
   const inner = el("div", { class: "container", style: "max-width:800px;padding:0" });
 
   const header = el("div", { class: "card-brutal tint-1 offset-lg", style: "text-align:center;padding:var(--sp-8);margin-bottom:var(--sp-5)" });
-  header.appendChild(el("div", { style: "font-size:56px;margin-bottom:12px", text: "🏆" }));
   header.appendChild(el("h1", { style: "font-size:var(--fs-3xl);margin-bottom:8px", text: exam.title || "امتحان" }));
   header.appendChild(el("p", { class: "text-muted", text: "انتهى الامتحان واكتمل التصحيح — إليك النتائج النهائية" }));
   header.appendChild(el("p", {
@@ -3156,6 +3396,7 @@ async function renderGrading(params) {
   const answers = attempt.answers || {};
   const manualScores = { ...(attempt.manualScores || {}) };
   const feedback = { ...(attempt.feedback || {}) };
+  const perQ = attempt.perQuestionScores || {};
   const totalPossible = allQuestions.reduce((s, q) => s + (Number(q.score) || 0), 0);
 
   const head = el("div", { class: "card grading-student-head" });
@@ -3183,7 +3424,6 @@ async function renderGrading(params) {
     const card = el("div", { class: "grading-card" });
     card.appendChild(el("div", { class: "grading-question", text: `س${i + 1} · ${q.text}` }));
 
-    // Student answer
     const ansBlock = el("div", { class: "grading-answer-block" });
     ansBlock.appendChild(el("div", { class: "answer-label" }, [
       svgIcon("user", 14),
@@ -3235,7 +3475,6 @@ async function renderGrading(params) {
     }
     card.appendChild(ansBlock);
 
-    // Correct answer
     if (q.type !== "essay") {
       const corBlock = el("div", { class: "grading-answer-block" });
       corBlock.appendChild(el("div", { class: "answer-label" }, [
@@ -3250,7 +3489,6 @@ async function renderGrading(params) {
       card.appendChild(corBlock);
     }
 
-    // Model answer (essay)
     if (q.type === "essay" && key.modelAnswer) {
       card.appendChild(el("div", { class: "answer-label" }, [
         svgIcon("book", 14),
@@ -3261,7 +3499,6 @@ async function renderGrading(params) {
       card.appendChild(modelBlock);
     }
 
-    // Justification model answer
     if ((q.type === "mcq_just" || q.type === "tf_just") && key.justificationModelAnswer) {
       card.appendChild(el("div", { class: "answer-label" }, [
         svgIcon("book", 14),
@@ -3272,14 +3509,13 @@ async function renderGrading(params) {
       card.appendChild(jBlock);
     }
 
-    // ===== SCORE INPUT — for ALL question types =====
     const scoreRow = el("div", { class: "grading-score-row" });
 
     if (!isManual) {
       const autoInfo = el("div", { class: "text-sm", style: "margin-bottom:8px;color:var(--text-muted);width:100%" });
       autoInfo.appendChild(el("span", { text: "التصحيح التلقائي: " }));
       autoInfo.appendChild(el("strong", {
-        text: `${a.autoScore || 0} / ${q.score || 1}`,
+        text: `${perQ[q.id] || 0} / ${q.score || 1}`,
         style: "color:var(--text-primary)"
       }));
       card.appendChild(autoInfo);
@@ -3301,7 +3537,7 @@ async function renderGrading(params) {
     } else if (isManual) {
       num.value = 0;
     } else {
-      num.value = Number(a.autoScore || 0);
+      num.value = Number(perQ[q.id] || 0);
     }
 
     num.addEventListener("input", () => {
@@ -3318,7 +3554,7 @@ async function renderGrading(params) {
         text: "تلقائي",
         onclick: () => {
           delete manualScores[q.id];
-          num.value = Number(a.autoScore || 0);
+          num.value = Number(perQ[q.id] || 0);
           toast("تم الرجوع للتصحيح التلقائي", "info", 2000);
         }
       });
@@ -3327,7 +3563,6 @@ async function renderGrading(params) {
 
     card.appendChild(scoreRow);
 
-    // Feedback — for ALL questions
     const fbField = el("div", { class: "field mt-3" });
     fbField.appendChild(el("label", { class: "field-label", text: "ملاحظة" }));
     const fbInput = el("input", { type: "text", class: "input", value: feedback[q.id] || "" });
@@ -3348,11 +3583,10 @@ async function renderGrading(params) {
   function computeFinalScore() {
     let total = 0;
     allQuestions.forEach((q) => {
-      const a = answers[q.id] || {};
       if (manualScores[q.id] != null) {
         total += Number(manualScores[q.id]) || 0;
       } else {
-        total += Number(a.autoScore || 0);
+        total += Number(perQ[q.id] || 0);
       }
     });
     return total;
@@ -3381,8 +3615,16 @@ async function renderGrading(params) {
   const actRow = el("div", { class: "row" });
   const saveBtn = el("button", { class: "btn btn-outline", type: "button", text: "حفظ التصحيح" });
   saveBtn.addEventListener("click", async () => {
-    try { await saveGrading(); toast("تم الحفظ", "success"); }
-    catch (err) { console.error(err); toast("فشل الحفظ", "error"); }
+    try {
+      await saveGrading();
+      toast("تم حفظ التصحيح", "success");
+    } catch (err) {
+      console.error(err);
+      const reason = err?.code === "permission-denied"
+        ? "ليس لديك صلاحية التعديل"
+        : err?.message || "خطأ في الشبكة";
+      toast(`فشل حفظ التصحيح: ${reason}`, "error", 6000);
+    }
   });
   actRow.appendChild(saveBtn);
 
@@ -3399,7 +3641,10 @@ async function renderGrading(params) {
       await updateDoc(doc(db, "exams", examId), { resultPublishedAt: serverTimestamp() });
       toast("تم نشر النتيجة", "success");
       navigate(`/app/exam?id=${examId}`);
-    } catch (err) { console.error(err); toast("فشل النشر", "error"); }
+    } catch (err) {
+      console.error(err);
+      toast("فشل النشر", "error");
+    }
   });
   actRow.appendChild(publishBtn);
   actions.appendChild(actRow);
@@ -3459,7 +3704,7 @@ function renderSupport() {
     const labelSpan = copyBtn.querySelector("span");
     if (labelSpan) {
       const original = labelSpan.textContent;
-      labelSpan.textContent = "✓ تم النسخ";
+      labelSpan.textContent = "تم النسخ";
       setTimeout(() => { labelSpan.textContent = original; }, 2000);
     }
   });
@@ -3563,7 +3808,7 @@ async function renderExam(params) {
         const s = existingAttempt.status;
         if (s === "submitted" || s === "graded") {
           loading.hidden = true;
-          showEntryModal(exam);
+          showEntryModal(exam, existingAttempt);
           return;
         }
         loading.hidden = true;
@@ -3586,11 +3831,12 @@ async function renderExam(params) {
    ============================================================ */
 let entryState = { exam: null, mode: "signed-out", attempt: null };
 
-async function showEntryModal(exam) {
+async function showEntryModal(exam, existingAttempt = null) {
   const modal = $("[data-entry-modal]");
   if (!modal) return;
 
-  entryState.exam = exam;
+  // Reset entry state for each exam
+  entryState = { exam, mode: "signed-out", attempt: existingAttempt };
 
   const title = $("[data-entry-title]");
   const meta = $("[data-entry-meta]");
@@ -3623,6 +3869,13 @@ async function showEntryModal(exam) {
   });
 
   modal.hidden = false;
+
+  if (existingAttempt) {
+    fillAlreadyTakenState(existingAttempt);
+    setEntryState("already-taken");
+    return;
+  }
+
   await resolveEntryState();
 }
 
@@ -3632,6 +3885,12 @@ async function resolveEntryState() {
 
   if (!user) {
     setEntryState("signed-out");
+    return;
+  }
+
+  if (entryState.attempt) {
+    fillAlreadyTakenState(entryState.attempt);
+    setEntryState("already-taken");
     return;
   }
 
@@ -3929,11 +4188,21 @@ async function createAttempt(exam, studentName, studentUid) {
    ============================================================ */
 function startExamRuntime(exam, opts) {
   const { attempt, preview = false } = opts;
+  const safeAttempt = attempt || {
+    id: null,
+    studentName: "معاينة",
+    formId: null,
+    answers: {},
+    questionOrder: null,
+    deadlineMs: Date.now() + (exam.duration || 60) * 60000
+  };
 
   const forms = exam.forms && exam.forms.length
     ? exam.forms
     : [{ id: "A", name: "النموذج أ", questions: exam.questions || [] }];
-  const form = forms.find((f) => f.id === attempt.formId) || forms[0];
+  const form = preview
+    ? forms[0]
+    : (forms.find((f) => f.id === safeAttempt.formId) || forms[0]);
   const questions = form.questions || [];
 
   const byId = {};
@@ -3941,15 +4210,15 @@ function startExamRuntime(exam, opts) {
 
   const orderedIds = preview
     ? questions.map((q) => q.id)
-    : (attempt.questionOrder || questions.map((q) => q.id));
+    : (safeAttempt.questionOrder || questions.map((q) => q.id));
 
   const displayMode = exam.displayMode || "scroll";
 
   const state = {
-    exam, attempt, preview, questions, byId, orderedIds, displayMode,
+    exam, attempt: safeAttempt, preview, questions, byId, orderedIds, displayMode,
     index: 0,
-    answers: preview ? {} : (attempt.answers || {}),
-    deadlineMs: preview ? Date.now() + (exam.duration || 60) * 60000 : attempt.deadlineMs,
+    answers: preview ? {} : (safeAttempt.answers || {}),
+    deadlineMs: preview ? Date.now() + (exam.duration || 60) * 60000 : safeAttempt.deadlineMs,
     timerInterval: null, autosaveInterval: null, heartbeatInterval: null,
     watcherUnsub: null,
     dirty: false, submitted: false, pendingExam: null,
@@ -3959,7 +4228,9 @@ function startExamRuntime(exam, opts) {
   };
   examRuntime = state;
 
-  $("[data-watermark-teacher]").textContent = `${attempt.studentName || ""} · QeyasQuiz`;
+  $("[data-watermark-teacher]").textContent = preview
+    ? "معاينة · QeyasQuiz"
+    : `${safeAttempt.studentName || ""} · QeyasQuiz`;
   $("[data-exam-title]").textContent = exam.title || "امتحان";
   $("[data-exam-meta]").textContent = `${subjectLabel(exam.subject)} · ${gradeLabel(exam.grade)}`;
 
@@ -4003,13 +4274,15 @@ function startExamRuntime(exam, opts) {
   if (prevBtn) prevBtn.onclick = () => { if (state.index > 0) showSingleQuestion(state.index - 1); };
   if (nextBtn) nextBtn.onclick = () => { if (state.index < state.orderedIds.length - 1) showSingleQuestion(state.index + 1); };
 
-  window.addEventListener("beforeunload", (e) => {
+  const beforeUnloadHandler = (e) => {
     if (!state.submitted && !state.preview) {
       e.preventDefault();
       e.returnValue = "";
       return "";
     }
-  });
+  };
+  window.addEventListener("beforeunload", beforeUnloadHandler);
+  state._beforeUnloadHandler = beforeUnloadHandler;
 }
 
 /* ---- Scroll Mode ---- */
@@ -4315,7 +4588,7 @@ function startAnticheat() {
     $("[data-security-ok]").onclick = () => { modal.hidden = true; };
   }
 
-  document.addEventListener("visibilitychange", () => {
+  const onVisibility = () => {
     if (s.submitted || s.preview) return;
 
     if (document.hidden) {
@@ -4335,7 +4608,7 @@ function startAnticheat() {
         );
       } else {
         securityAlert(
-          "🚫 تجاوزت الحد",
+          "تجاوزت الحد",
           "لقد تجاوزت الحد المسموح من التحذيرات (3 مرات). سيتم تسليم ورقتك تلقائيًا الآن."
         );
         setTimeout(async () => {
@@ -4348,34 +4621,55 @@ function startAnticheat() {
     } else {
       logEvent("tab_visible");
     }
-  });
+  };
 
-  document.addEventListener("copy", (e) => {
+  const onCopy = (e) => {
     if (s.submitted || s.preview) return;
     const target = e.target;
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
     e.preventDefault();
     try { e.clipboardData.setData("text/plain", ""); } catch {}
     logEvent("copy_attempt");
-  }, true);
+  };
 
-  document.addEventListener("cut", (e) => {
+  const onCut = (e) => {
     if (s.submitted || s.preview) return;
     const target = e.target;
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
     e.preventDefault();
     logEvent("cut_attempt");
-  }, true);
+  };
 
-  document.addEventListener("contextmenu", (e) => {
+  const onPaste = (e) => {
+    if (s.submitted) return;
+
+    // Allow paste only for exam owner in preview mode
+    const isOwnerPreview =
+      s.preview &&
+      currentProfile &&
+      currentProfile.uid === s.exam.ownerId;
+    if (isOwnerPreview) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      if (e.clipboardData) e.clipboardData.setData("text/plain", "");
+    } catch {}
+
+    logEvent("paste_blocked");
+    toast("اللصق غير مسموح داخل الامتحان", "warning", 2500);
+    return false;
+  };
+
+  const onContextMenu = (e) => {
     if (s.submitted || s.preview) return;
     const target = e.target;
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
     e.preventDefault();
     logEvent("context_menu");
-  }, true);
+  };
 
-  document.addEventListener("keydown", (e) => {
+  const onKeyDown = (e) => {
     if (s.submitted || s.preview) return;
     const ctrl = e.ctrlKey || e.metaKey;
     const key = (e.key || "").toLowerCase();
@@ -4394,21 +4688,30 @@ function startAnticheat() {
       logEvent("devtools_attempt");
       return false;
     }
-  }, true);
+  };
 
-  window.addEventListener("offline", () => {
+  const onOffline = () => {
     logEvent("offline");
     const b = $("[data-offline-banner]"); if (b) b.hidden = false;
     const i = $("[data-connection-indicator]"); if (i) i.classList.add("is-offline");
-  });
+  };
 
-  window.addEventListener("online", () => {
+  const onOnline = () => {
     logEvent("online");
     const b = $("[data-offline-banner]"); if (b) b.hidden = true;
     const i = $("[data-connection-indicator]"); if (i) i.classList.remove("is-offline");
-  });
+  };
 
-  setInterval(() => {
+  document.addEventListener("visibilitychange", onVisibility);
+  document.addEventListener("copy", onCopy, true);
+  document.addEventListener("cut", onCut, true);
+  document.addEventListener("paste", onPaste, true);
+  document.addEventListener("contextmenu", onContextMenu, true);
+  document.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("offline", onOffline);
+  window.addEventListener("online", onOnline);
+
+  const devtoolsInterval = setInterval(() => {
     if (s.submitted) return;
     const wd = window.outerWidth - window.innerWidth;
     const hd = window.outerHeight - window.innerHeight;
@@ -4424,6 +4727,19 @@ function startAnticheat() {
       x.style.webkitUserSelect = "none";
     }
   });
+
+  // Cleanup reference
+  s._anticheatCleanup = () => {
+    document.removeEventListener("visibilitychange", onVisibility);
+    document.removeEventListener("copy", onCopy, true);
+    document.removeEventListener("cut", onCut, true);
+    document.removeEventListener("paste", onPaste, true);
+    document.removeEventListener("contextmenu", onContextMenu, true);
+    document.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("offline", onOffline);
+    window.removeEventListener("online", onOnline);
+    clearInterval(devtoolsInterval);
+  };
 }
 
 function startMovingWatermark() {
@@ -4432,7 +4748,7 @@ function startMovingWatermark() {
   wm.dataset.moving = "1";
 
   let lx = 0, ly = 0;
-  setInterval(() => {
+  const interval = setInterval(() => {
     let x, y, tries = 0;
     do {
       x = Math.random() * 100 - 50;
@@ -4442,6 +4758,14 @@ function startMovingWatermark() {
     lx = x; ly = y;
     wm.style.transform = `translate(${x}px, ${y}px)`;
   }, 3000);
+
+  if (examRuntime) {
+    const prevCleanup = examRuntime._anticheatCleanup;
+    examRuntime._anticheatCleanup = () => {
+      if (prevCleanup) prevCleanup();
+      clearInterval(interval);
+    };
+  }
 }
 
 /* ---- Fullscreen Guard ---- */
@@ -4589,6 +4913,10 @@ async function performSubmit(kind = "manual", reason = null) {
   clearInterval(s.heartbeatInterval);
   if (s.watcherUnsub) { try { s.watcherUnsub(); } catch {} s.watcherUnsub = null; }
   if (s._fsCleanup) { try { s._fsCleanup(); } catch {} }
+  if (s._anticheatCleanup) { try { s._anticheatCleanup(); } catch {} }
+  if (s._beforeUnloadHandler) {
+    try { window.removeEventListener("beforeunload", s._beforeUnloadHandler); } catch {}
+  }
 
   document.body.classList.remove("fs-locked");
   try { if (document.fullscreenElement) document.exitFullscreen?.(); } catch {}
@@ -4612,7 +4940,12 @@ async function performSubmit(kind = "manual", reason = null) {
   } catch (err) {
     console.error(err);
     s.submitted = false;
-    toast("فشل التسليم. حاول مرة أخرى.", "error");
+    const reasonText = !navigator.onLine
+      ? "لا يوجد اتصال بالإنترنت — إجاباتك محفوظة محليًا"
+      : err?.code === "permission-denied"
+      ? "انتهت صلاحية الجلسة — أعد تحميل الصفحة"
+      : err?.message || "خطأ غير معروف";
+    toast(`فشل التسليم: ${reasonText}`, "error", 8000);
   }
 }
 
@@ -4785,6 +5118,7 @@ async function renderResultContent(attempt, exam) {
 
   const answersMap = await getExamAnswers(attempt.examId);
   const allQuestions = getAllExamQuestions(exam);
+  const perQ = attempt.perQuestionScores || {};
 
   reviewHead.hidden = false;
   reviewHost.innerHTML = "";
@@ -4792,7 +5126,7 @@ async function renderResultContent(attempt, exam) {
   allQuestions.forEach((q, i) => {
     const a = attempt.answers?.[q.id] || {};
     const key = answersMap[q.id] || {};
-    const autoSc = Number(a.autoScore || 0);
+    const autoSc = Number(perQ[q.id] || 0);
     const manSc = Number((attempt.manualScores || {})[q.id] || 0);
     const got = (attempt.manualScores && attempt.manualScores[q.id] != null)
       ? manSc
@@ -4982,7 +5316,7 @@ async function deleteAccountFlow() {
 function showDeleteStep1() {
   return new Promise((resolve) => {
     openModal({
-      title: "⚠️ حذف الحساب",
+      title: "حذف الحساب",
       body: el("div", { class: "stack-sm" }, [
         el("p", { class: "text-secondary", text: "هل أنت متأكد من رغبتك في حذف حسابك؟" }),
         el("div", { class: "card", style: "padding:var(--sp-4);background:var(--danger-50);border-color:var(--danger-500)" }, [
@@ -5008,7 +5342,7 @@ function showDeleteStep1() {
 function showDeleteStep2() {
   return new Promise((resolve) => {
     openModal({
-      title: "🚨 تأكيد نهائي",
+      title: "تأكيد نهائي",
       body: el("div", { class: "stack-sm" }, [
         el("p", { class: "text-secondary fw-semibold", text: "هذه العملية لا يمكن التراجع عنها." })
       ]),
@@ -5049,7 +5383,6 @@ document.addEventListener("click", (e) => {
   if (e.target.closest("[data-delete-account]")) { deleteAccountFlow(); return; }
   if (e.target.closest("[data-back]")) { history.back(); return; }
 
-  // ===== REFRESH BUTTON with countdown =====
   const refreshBtn = e.target.closest("[data-refresh-page]");
   if (refreshBtn) {
     if (refreshBtn.disabled) return;
