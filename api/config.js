@@ -9,9 +9,8 @@ export default function handler(req, res) {
       messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
       appId: process.env.FIREBASE_APP_ID
     },
-    cloudinary: {
-      cloudName: process.env.CLOUDINARY_CLOUD_NAME,
-      uploadPreset: process.env.CLOUDINARY_UPLOAD_PRESET
+    upload: {
+      cloudName: process.env.CLOUDINARY_CLOUD_NAME
     }
   });
 }
