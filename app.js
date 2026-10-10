@@ -14,7 +14,7 @@ async function loadConfig() {
     if (!res.ok) throw new Error("config fetch failed");
     APP_CONFIG = await res.json();
     if (!APP_CONFIG?.firebase?.apiKey) throw new Error("missing firebase config");
-    if (!APP_CONFIG?.cloudinary?.cloudName) throw new Error("missing cloudinary config");
+    if (!APP_CONFIG?.upload?.cloudName) throw new Error("missing upload config");
   } catch (err) {
     console.error("[config] failed:", err);
     document.body.innerHTML = `
@@ -52,9 +52,8 @@ const db = getFirestore(firebaseApp);
 
 setPersistence(auth, browserLocalPersistence).catch(() => {});
 
-const CLOUDINARY = {
-  cloudName: cfg.cloudinary.cloudName,
-  uploadPreset: cfg.cloudinary.uploadPreset,
+const UPLOAD = {
+  cloudName: cfg.upload.cloudName,
   avatarFolder: "qeyasquiz/avatars",
   questionFolder: "qeyasquiz/questions"
 };
@@ -819,41 +818,92 @@ function isExamFullyGraded(exam, attempts) {
 function shouldShowLeaderboard(exam, attempts) {
   const status = computeStatus(exam);
   if (status !== "completed") return false;
+  if (!exam.resultPublishedAt) return false;
   return isExamFullyGraded(exam, attempts);
 }
 
 /* ============================================================
-   CLOUDINARY UPLOAD
+   SIGNED UPLOAD
    ============================================================ */
+async function getUploadSignature(folder) {
+  const res = await fetch("/api/cloudinary-signature", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folder })
+  });
+  if (!res.ok) throw new Error("SIGN_FAILED");
+  const data = await res.json().catch(() => ({}));
+  if (!data.signature || !data.apiKey || !data.timestamp) throw new Error("SIGN_INVALID");
+  return data;
+}
+
 async function uploadToCloudinary(file, folder, maxBytes = 2 * 1024 * 1024) {
   if (!file) throw new Error("NO_FILE");
   if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) throw new Error("INVALID_TYPE");
   if (file.size > maxBytes) throw new Error("TOO_LARGE");
+  if (!UPLOAD.cloudName) throw new Error("CONFIG_MISSING");
+
+  let sign;
+  try {
+    sign = await getUploadSignature(folder);
+  } catch (err) {
+    console.error("[upload] signature step failed:", err);
+    throw new Error("SIGN_FAILED");
+  }
 
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("upload_preset", CLOUDINARY.uploadPreset);
-  formData.append("folder", folder);
+  formData.append("api_key", sign.apiKey);
+  formData.append("timestamp", sign.timestamp);
+  formData.append("signature", sign.signature);
+  formData.append("folder", sign.folder);
 
-  const res = await fetch(
-    `https://api.cloudinary.com/v1_1/${CLOUDINARY.cloudName}/image/upload`,
-    { method: "POST", body: formData }
-  );
+  const endpoint = `https://api.cloudinary.com/v1_1/${sign.cloudName}/image/upload`;
+
+  let res;
+  try {
+    res = await fetch(endpoint, {
+      method: "POST",
+      body: formData,
+      mode: "cors"
+    });
+  } catch (err) {
+    console.error("[upload] network error:", err);
+    throw new Error("NETWORK_ERROR");
+  }
+
+  const body = await res.json().catch(() => ({}));
+
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    console.error("[cloudinary]", body);
+    console.error("[upload] rejected:", { status: res.status, response: body });
     throw new Error("UPLOAD_FAILED");
   }
-  const data = await res.json();
-  return data.secure_url;
+
+  if (!body.secure_url) throw new Error("UPLOAD_INCOMPLETE");
+
+  return body.secure_url;
+}
+
+function uploadErrorMessage(err, maxLabel = "") {
+  const msg = err?.message || "";
+  const suffix = maxLabel ? ` (${maxLabel})` : "";
+  if (msg === "NO_FILE") return "لم يتم اختيار ملف";
+  if (msg === "INVALID_TYPE") return "صيغة الصورة غير مدعومة — JPG أو PNG أو WebP فقط";
+  if (msg === "TOO_LARGE") return `حجم الصورة أكبر من الحد المسموح${suffix}`;
+  if (msg === "CONFIG_MISSING") return "الإعدادات غير مكتملة — تواصل مع الدعم";
+  if (msg === "SIGN_FAILED" || msg === "SIGN_INVALID") return "تعذّر تجهيز الرفع — حاول مرة أخرى";
+  if (msg === "NETWORK_ERROR") return "تعذّر الاتصال بالخادم — تحقق من الإنترنت أو عطّل مانع الإعلانات";
+  if (msg === "UPLOAD_INCOMPLETE") return "الرفع لم يكتمل — حاول مرة أخرى";
+  if (msg === "UPLOAD_FAILED") return "فشل رفع الصورة — حاول مرة أخرى";
+  return "تعذّر رفع الصورة — حاول مرة أخرى";
 }
 
 async function uploadAvatar(uid, file) {
-  return uploadToCloudinary(file, `${CLOUDINARY.avatarFolder}/${uid}`, 2 * 1024 * 1024);
+  return uploadToCloudinary(file, `${UPLOAD.avatarFolder}/${uid}`, 2 * 1024 * 1024);
 }
 
 async function uploadQuestionImage(examId, file) {
-  return uploadToCloudinary(file, `${CLOUDINARY.questionFolder}/${examId || "draft"}`, 5 * 1024 * 1024);
+  return uploadToCloudinary(file, `${UPLOAD.questionFolder}/${examId || "draft"}`, 5 * 1024 * 1024);
 }
 
 /* ============================================================
@@ -888,7 +938,6 @@ function navigate(path) {
 }
 
 function handleRoute() {
-  // Cleanup exam runtime listeners when leaving /exam
   const rawNext = (location.hash.replace(/^#/, "")) || "/";
   const [nextPath] = rawNext.split("?");
   if (examRuntime && examRuntime.watcherUnsub && nextPath !== "/exam") {
@@ -956,7 +1005,7 @@ function toggleTheme() {
 }
 
 /* ============================================================
-   AUTH STATE — Optimized
+   AUTH STATE
    ============================================================ */
 let authResolved = false;
 
@@ -971,7 +1020,8 @@ onAuthStateChanged(auth, async (user) => {
     authResolved = true;
     hideGlobalLoading();
 
-    if (!["/", "/login", "/exam", "/result"].includes(currentRoute)) {
+    const isStudentOrPublic = ["/", "/login", "/exam", "/result"].includes(currentRoute);
+    if (!isStudentOrPublic) {
       navigate("/login");
     } else if (currentRoute && routeHandlers[currentRoute]) {
       Promise.resolve(routeHandlers[currentRoute](currentParams || new URLSearchParams())).catch(() => {});
@@ -1039,7 +1089,6 @@ onAuthStateChanged(auth, async (user) => {
 
 function resolveAuthRoute() {
   const hasTeacherProfile = currentProfile && currentProfile.username;
-
   const isStudentOrPublic = ["/exam", "/result", "/"].includes(currentRoute);
 
   if (!currentUser) {
@@ -1302,13 +1351,7 @@ function initSetup() {
           photoURL = await uploadAvatar(currentUser.uid, setupState.photoFile);
         } catch (err) {
           console.warn(err);
-          const msgs = {
-            NO_FILE: "لم يتم اختيار ملف",
-            INVALID_TYPE: "صيغة الصورة غير مدعومة — JPG / PNG / WebP فقط",
-            TOO_LARGE: "حجم الصورة أكبر من 2 ميجابايت",
-            UPLOAD_FAILED: "فشل الاتصال بـ Cloudinary — تحقق من الإعدادات",
-          };
-          toast(msgs[err.message] || "تعذّر رفع الصورة — سيتم استخدام صورة Google", "warning", 6000);
+          toast(uploadErrorMessage(err, "2 ميجابايت") + " — سيتم استخدام صورة Google", "warning", 6000);
         }
       }
 
@@ -1771,13 +1814,7 @@ function buildQuestionCard(q, idx) {
       markDirty();
     } catch (err) {
       console.error(err);
-      const msgs = {
-        NO_FILE: "لم يتم اختيار ملف",
-        INVALID_TYPE: "صيغة الصورة غير مدعومة — JPG / PNG / WebP فقط",
-        TOO_LARGE: "حجم الصورة أكبر من 5 ميجابايت",
-        UPLOAD_FAILED: "فشل الاتصال بـ Cloudinary — تحقق من الإعدادات",
-      };
-      toast(msgs[err.message] || `تعذّر رفع الصورة (${err.message || "خطأ غير معروف"})`, "error", 6000);
+      toast(uploadErrorMessage(err, "5 ميجابايت"), "error", 7000);
     }
   });
   const uploadBtn = el("button", { class: "btn btn-outline btn-sm", type: "button" });
@@ -2589,18 +2626,7 @@ async function renderExamDetails(params) {
     return;
   }
 
-  // Auto-grade only if there are ungraded submitted attempts
-  let attemptsPre = await listAttempts(examId);
-  const hasUngraded = attemptsPre.some((a) => !a.gradedAt && a.status === "submitted");
-  if (hasUngraded) {
-    try {
-      const graded = await autoGradeAttempts(examId, exam);
-      if (graded > 0) toast(`تم تصحيح ${graded} ورقة`, "success");
-      attemptsPre = await listAttempts(examId);
-    } catch (err) { console.warn(err); }
-  }
-
-  const attempts = attemptsPre;
+  const attempts = await listAttempts(examId);
   const status = computeStatus(exam);
 
   host.innerHTML = "";
@@ -2660,7 +2686,8 @@ async function renderExamDetails(params) {
   host.appendChild(head);
 
   if (attempts.length) {
-    host.appendChild(buildQuickReport(exam, attempts));
+    const report = await buildQuickReport(exam, attempts);
+    host.appendChild(report);
   }
 
   if (shouldShowLeaderboard(exam, attempts)) {
@@ -2755,7 +2782,6 @@ async function buildQuickReport(exam, attempts) {
     }));
     report.appendChild(lowItem);
 
-    // Hardest questions analysis
     const allQuestions = getAllExamQuestions(exam);
     if (allQuestions.length && graded.length > 0) {
       const answersMap = await getExamAnswers(exam.id);
@@ -2823,6 +2849,44 @@ function renderStudentsTab(host, exam, attempts) {
     return;
   }
 
+  const toolbar = el("div", { class: "row-between", style: "margin-bottom:var(--sp-3);gap:var(--sp-3);flex-wrap:wrap" });
+  const pendingCount = attempts.filter((a) => a.status === "submitted" && !a.gradedAt).length;
+
+  const infoEl = el("div", { class: "text-sm text-muted" });
+  infoEl.textContent = pendingCount
+    ? `فيه ${pendingCount} ورقة بانتظار التصحيح`
+    : "كل الأوراق مصححة";
+  toolbar.appendChild(infoEl);
+
+  const gradeAllBtn = el("button", {
+    type: "button",
+    class: "btn btn-primary btn-sm",
+    disabled: pendingCount === 0
+  });
+  gradeAllBtn.appendChild(svgIcon("check", 14));
+  gradeAllBtn.appendChild(document.createTextNode(" تصحيح الكل"));
+  gradeAllBtn.addEventListener("click", async () => {
+    if (pendingCount === 0) return;
+    gradeAllBtn.classList.add("is-loading");
+    try {
+      const graded = await autoGradeAttempts(exam.id, exam);
+      if (graded > 0) {
+        toast(`تم تصحيح ${graded} ورقة`, "success");
+        renderExamDetails(currentParams);
+      } else {
+        toast("لا يوجد ما يستوجب التصحيح", "info");
+      }
+    } catch (err) {
+      console.error(err);
+      toast("فشل التصحيح", "error");
+    } finally {
+      gradeAllBtn.classList.remove("is-loading");
+    }
+  });
+  toolbar.appendChild(gradeAllBtn);
+
+  host.appendChild(toolbar);
+
   const wrap = el("div", { class: "card", style: "overflow-x:auto" });
   const table = el("table", { class: "students-table" });
   table.innerHTML = `<thead><tr>
@@ -2847,7 +2911,6 @@ function renderStudentsTab(host, exam, attempts) {
     tr.appendChild(el("td", { text: a.submittedAt ? fmtDate(a.submittedAt) : "—" }));
     tr.appendChild(el("td", { text: a.score != null ? `${a.score} / ${totalPossible}` : "—" }));
 
-    // Events column
     const eventsCount = (a.anticheatEvents || []).length;
     const warningsCount = (a.anticheatEvents || []).filter(
       (e) => e.type === "tab_hidden" || e.type === "window_blur" || e.type === "fullscreen_exit"
@@ -2866,7 +2929,6 @@ function renderStudentsTab(host, exam, attempts) {
     }
     tr.appendChild(eventsTd);
 
-    // Details column
     const detailsTd = el("td");
     const detailsBtn = el("button", {
       type: "button",
@@ -3628,14 +3690,14 @@ async function renderGrading(params) {
   });
   actRow.appendChild(saveBtn);
 
-  const publishBtn = el("button", { class: "btn btn-primary", type: "button", text: "نشر النتيجة" });
+  const publishBtn = el("button", { class: "btn btn-primary", type: "button", text: "نشر هذه النتيجة" });
   publishBtn.addEventListener("click", async () => {
     try {
       await saveGrading();
       const allAttempts = await listAttempts(examId);
       const ungraded = allAttempts.filter((a) => !a.gradedAt && a.status === "submitted");
       if (ungraded.length) {
-        toast(`جارٍ تصحيح ${ungraded.length} محاولة…`, "info");
+        toast(`جارٍ تصحيح ${ungraded.length} ورقة…`, "info");
         await autoGradeAttempts(examId, exam);
       }
       await updateDoc(doc(db, "exams", examId), { resultPublishedAt: serverTimestamp() });
@@ -3835,7 +3897,6 @@ async function showEntryModal(exam, existingAttempt = null) {
   const modal = $("[data-entry-modal]");
   if (!modal) return;
 
-  // Reset entry state for each exam
   entryState = { exam, mode: "signed-out", attempt: existingAttempt };
 
   const title = $("[data-entry-title]");
@@ -4643,7 +4704,6 @@ function startAnticheat() {
   const onPaste = (e) => {
     if (s.submitted) return;
 
-    // Allow paste only for exam owner in preview mode
     const isOwnerPreview =
       s.preview &&
       currentProfile &&
@@ -4728,7 +4788,6 @@ function startAnticheat() {
     }
   });
 
-  // Cleanup reference
   s._anticheatCleanup = () => {
     document.removeEventListener("visibilitychange", onVisibility);
     document.removeEventListener("copy", onCopy, true);
