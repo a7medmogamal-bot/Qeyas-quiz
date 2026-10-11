@@ -59,6 +59,28 @@ const UPLOAD = {
 };
 
 /* ============================================================
+   CONSTANTS
+   ============================================================ */
+const SUPPORT_PHONE = "01016212814";
+const SUPPORT_WHATSAPP = "201016212814";
+
+const ADMIN_EMAIL = "a7med.mo.gamal@gmail.com";
+
+const CREDIT_PACKS = {
+  free:    { id: "free",    name: "Free",    credits: 10,   priceEGP: 0,    badge: null,              order: 1, description: "للتجربة" },
+  plus:    { id: "plus",    name: "Plus",    credits: 500,  priceEGP: 200,  badge: "الأكثر اختيارًا", order: 2, description: "للمعلم المتوسط" },
+  premium: { id: "premium", name: "Premium", credits: 2000, priceEGP: 700,  badge: null,              order: 3, description: "للمعلم المكثف" },
+  school:  { id: "school",  name: "مدرسة",   credits: 6000, priceEGP: 1800, badge: null,              order: 4, description: "للمدارس والمعاهد" }
+};
+
+const AI_CONSTANTS = {
+  MAX_ESSAYS_PER_REQUEST: 400,
+  MAX_CONCURRENT_AI: 3,
+  QUEUE_POLL_INTERVAL: 3000,
+  QUEUE_MAX_WAIT_SEC: 300
+};
+
+/* ============================================================
    SUBJECTS + GRADES
    ============================================================ */
 const SUBJECTS = [
@@ -92,22 +114,17 @@ function subjectLabel(id) {
   return s ? s.ar : id;
 }
 
-function gradeLabel(id) {
-  return GRADE_LABELS[id] || id || "—";
-}
+function gradeLabel(id) { return GRADE_LABELS[id] || id || "—"; }
 
 function statusLabel(s) {
   return {
-    draft: "مسودة",
-    scheduled: "مجدول",
-    active: "نشط",
-    completed: "مكتمل",
-    paused: "متوقف",
-    submitted: "تم التسليم",
-    graded: "تم التصحيح",
-    in_progress: "قيد الحل"
+    draft: "مسودة", scheduled: "مجدول", active: "نشط", completed: "مكتمل", paused: "متوقف",
+    submitted: "تم التسليم", graded: "تم التصحيح", in_progress: "قيد الحل",
+    pending: "بانتظار الموافقة", active_sub: "نشط", expired: "منتهي", rejected: "مرفوض"
   }[s] || s;
 }
+
+function planLabel(p) { return CREDIT_PACKS[p]?.name || "Free"; }
 
 /* ============================================================
    UTILS
@@ -142,6 +159,30 @@ function svgIcon(id, size = 18) {
   return svg;
 }
 
+function creditCoinSVG(size = 20, gradientId = "coinGradApp") {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 64 64");
+  svg.setAttribute("width", size);
+  svg.setAttribute("height", size);
+  svg.setAttribute("aria-hidden", "true");
+  svg.innerHTML = `
+    <circle cx="32" cy="32" r="30" fill="url(#${gradientId})" stroke="#b8860b" stroke-width="1.5"/>
+    <circle cx="32" cy="32" r="26" fill="url(#${gradientId}Inner)" opacity="0.85"/>
+    <text x="32" y="42" text-anchor="middle" font-family="Inter,sans-serif" font-size="28" font-weight="900" fill="#7a4f00">Q</text>
+    <defs>
+      <radialGradient id="${gradientId}" cx="35%" cy="30%" r="70%">
+        <stop offset="0%" stop-color="#fff3b0"/>
+        <stop offset="45%" stop-color="#f5c542"/>
+        <stop offset="100%" stop-color="#c98a00"/>
+      </radialGradient>
+      <radialGradient id="${gradientId}Inner" cx="35%" cy="30%" r="70%">
+        <stop offset="0%" stop-color="#fff9d6"/>
+        <stop offset="100%" stop-color="#e0a800"/>
+      </radialGradient>
+    </defs>`;
+  return svg;
+}
+
 function debounce(fn, wait) {
   let tm;
   return (...args) => {
@@ -171,6 +212,44 @@ function generateResultCode() {
   return code;
 }
 
+function generatePublicId() {
+  const rand = Math.floor(Math.random() * 10000000).toString().padStart(7, "0");
+  return parseInt("1" + rand, 10);
+}
+
+async function generateUniquePublicId(maxTries = 5) {
+  for (let i = 0; i < maxTries; i++) {
+    const id = generatePublicId();
+    try {
+      const snap = await getDoc(doc(db, "publicIds", String(id)));
+      if (!snap.exists()) return id;
+    } catch {}
+  }
+  throw new Error("PUBLIC_ID_GENERATION_FAILED");
+}
+
+async function ensureUserHasPublicId(uidValue) {
+  const userRef = doc(db, "users", uidValue);
+  const snap = await getDoc(userRef);
+  if (!snap.exists()) return null;
+
+  const data = snap.data();
+  if (data.publicId) return data.publicId;
+
+  const newId = await generateUniquePublicId();
+
+  await runTransaction(db, async (tx) => {
+    const publicIdRef = doc(db, "publicIds", String(newId));
+    const existing = await tx.get(publicIdRef);
+    if (existing.exists()) throw new Error("PUBLIC_ID_COLLISION");
+
+    tx.set(publicIdRef, { uid: uidValue, createdAt: serverTimestamp() });
+    tx.update(userRef, { publicId: newId, publicIdAssignedAt: serverTimestamp() });
+  });
+
+  return newId;
+}
+
 function fmtDate(ts) {
   if (!ts) return "—";
   const d = ts.toDate ? ts.toDate() : new Date(ts);
@@ -179,6 +258,13 @@ function fmtDate(ts) {
     year: "numeric", month: "long", day: "numeric",
     hour: "2-digit", minute: "2-digit"
   });
+}
+
+function fmtDateShort(ts) {
+  if (!ts) return "";
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("ar-EG", { year: "numeric", month: "short", day: "numeric" });
 }
 
 function normalizeUsername(u) { return String(u || "").trim().toLowerCase(); }
@@ -197,6 +283,11 @@ function fromLocalInput(v) {
   const d = new Date(v);
   if (isNaN(d.getTime())) return null;
   return Timestamp.fromDate(d);
+}
+
+function isEssay(q) { return q.type === "essay" || q.type === "mcq_just" || q.type === "tf_just"; }
+function isAdminEmail(email) {
+  return String(email || "").toLowerCase().trim() === ADMIN_EMAIL;
 }
 
 /* ============================================================
@@ -284,11 +375,9 @@ function initThreeBackground() {
 
   const particleMat = new THREE.PointsMaterial({
     color: isDark ? accentColor : brandColor,
-    size: 0.08,
-    transparent: true,
+    size: 0.08, transparent: true,
     opacity: isDark ? 0.55 : 0.4,
-    sizeAttenuation: true,
-    depthWrite: false,
+    sizeAttenuation: true, depthWrite: false,
     blending: isDark ? THREE.AdditiveBlending : THREE.NormalBlending
   });
 
@@ -302,9 +391,7 @@ function initThreeBackground() {
 
   const lineMat = new THREE.LineBasicMaterial({
     color: isDark ? accentColor : brandColor,
-    transparent: true,
-    opacity: isDark ? 0.12 : 0.08,
-    depthWrite: false
+    transparent: true, opacity: isDark ? 0.12 : 0.08, depthWrite: false
   });
 
   const lines = new THREE.LineSegments(lineGeom, lineMat);
@@ -313,9 +400,7 @@ function initThreeBackground() {
   const knotGeom = new THREE.TorusKnotGeometry(1.6, 0.4, 80, 12, 2, 3);
   const knotMat = new THREE.MeshBasicMaterial({
     color: isDark ? accentColor : brandColor,
-    wireframe: true,
-    transparent: true,
-    opacity: isDark ? 0.14 : 0.08
+    wireframe: true, transparent: true, opacity: isDark ? 0.14 : 0.08
   });
   const knot = new THREE.Mesh(knotGeom, knotMat);
   knot.position.set(0, 0, -2);
@@ -324,9 +409,7 @@ function initThreeBackground() {
   const icoGeom = new THREE.IcosahedronGeometry(0.7, 1);
   const icoMat = new THREE.MeshBasicMaterial({
     color: isDark ? 0x6a8dff : 0x2a4cd6,
-    wireframe: true,
-    transparent: true,
-    opacity: isDark ? 0.2 : 0.12
+    wireframe: true, transparent: true, opacity: isDark ? 0.2 : 0.12
   });
   const ico = new THREE.Mesh(icoGeom, icoMat);
   ico.position.set(-5, 3, -3);
@@ -434,8 +517,7 @@ function initThreeBackground() {
     ico2.material.opacity = dark ? 0.2 : 0.12;
   });
   themeObserver.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ["data-theme"]
+    attributes: true, attributeFilter: ["data-theme"]
   });
 
   animate();
@@ -446,65 +528,48 @@ function initThreeBackground() {
    ============================================================ */
 function initAntiCopy() {
   document.addEventListener("contextmenu", (e) => {
-    const target = e.target;
-    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
-    e.preventDefault();
-    return false;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    e.preventDefault(); return false;
   });
 
   document.addEventListener("selectstart", (e) => {
-    const target = e.target;
-    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
-    e.preventDefault();
-    return false;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    e.preventDefault(); return false;
   });
 
   document.addEventListener("copy", (e) => {
-    const target = e.target;
-    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
     e.preventDefault();
     if (e.clipboardData) e.clipboardData.setData("text/plain", "");
     return false;
   }, true);
 
   document.addEventListener("cut", (e) => {
-    const target = e.target;
-    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
-    e.preventDefault();
-    return false;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    e.preventDefault(); return false;
   }, true);
 
   document.addEventListener("dragstart", (e) => {
     if (e.target.tagName === "IMG" || e.target.tagName === "SVG" || e.target.closest("svg")) {
-      e.preventDefault();
-      return false;
+      e.preventDefault(); return false;
     }
   }, true);
 
   document.addEventListener("keydown", (e) => {
     const ctrl = e.ctrlKey || e.metaKey;
     const key = (e.key || "").toLowerCase();
-    const target = e.target;
-    const isInput = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+    const t = e.target;
+    const isInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
 
     if (isInput && ctrl && ["c", "x", "v", "a"].includes(key)) return;
-    if (ctrl && ["c", "x", "a"].includes(key)) {
-      e.preventDefault();
-      e.stopPropagation();
-      return false;
-    }
-    if (ctrl && ["s", "p", "u"].includes(key)) {
-      e.preventDefault();
-      return false;
-    }
-    if (key === "f12") {
-      e.preventDefault();
-      return false;
-    }
-    if (ctrl && e.shiftKey && ["i", "j", "c", "k"].includes(key)) {
-      e.preventDefault();
-      return false;
-    }
+    if (ctrl && ["c", "x", "a"].includes(key)) { e.preventDefault(); e.stopPropagation(); return false; }
+    if (ctrl && ["s", "p", "u"].includes(key)) { e.preventDefault(); return false; }
+    if (key === "f12") { e.preventDefault(); return false; }
+    if (ctrl && e.shiftKey && ["i", "j", "c", "k"].includes(key)) { e.preventDefault(); return false; }
   }, true);
 
   const observer = new MutationObserver((mutations) => {
@@ -565,10 +630,7 @@ function openModal({ title, body, actions = [], className = "", onClose }) {
         class: `btn ${a.class || "btn-ghost"}`,
         text: a.label,
         onclick: async () => {
-          if (a.onClick) {
-            const r = await a.onClick();
-            if (r === false) return;
-          }
+          if (a.onClick) { const r = await a.onClick(); if (r === false) return; }
           if (a.keepOpen !== true) close();
         }
       });
@@ -594,15 +656,16 @@ googleProvider.setCustomParameters({ prompt: "select_account" });
 let currentUser = null;
 let currentProfile = null;
 let currentStudentProfile = null;
+let currentCredits = null;
+let creditsUnsub = null;
+let isUserAdmin = false;
 
 const PROFILE_CACHE_KEY = "qeyasquiz.profile.cache";
 const STUDENT_CACHE_KEY = "qeyasquiz.student.profile";
 
 function cacheProfile(profile) {
   if (!profile) return;
-  try {
-    localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({ ...profile, _cachedAt: Date.now() }));
-  } catch {}
+  try { localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({ ...profile, _cachedAt: Date.now() })); } catch {}
 }
 
 function getCachedProfile() {
@@ -611,22 +674,17 @@ function getCachedProfile() {
     if (!raw) return null;
     const profile = JSON.parse(raw);
     if (profile._cachedAt && Date.now() - profile._cachedAt > 7 * 24 * 60 * 60 * 1000) {
-      localStorage.removeItem(PROFILE_CACHE_KEY);
-      return null;
+      localStorage.removeItem(PROFILE_CACHE_KEY); return null;
     }
     return profile;
   } catch { return null; }
 }
 
-function clearProfileCache() {
-  try { localStorage.removeItem(PROFILE_CACHE_KEY); } catch {}
-}
+function clearProfileCache() { try { localStorage.removeItem(PROFILE_CACHE_KEY); } catch {} }
 
 function cacheStudentProfile(profile) {
   if (!profile) return;
-  try {
-    localStorage.setItem(STUDENT_CACHE_KEY, JSON.stringify({ ...profile, _cachedAt: Date.now() }));
-  } catch {}
+  try { localStorage.setItem(STUDENT_CACHE_KEY, JSON.stringify({ ...profile, _cachedAt: Date.now() })); } catch {}
 }
 
 function getCachedStudentProfile() {
@@ -635,16 +693,13 @@ function getCachedStudentProfile() {
     if (!raw) return null;
     const data = JSON.parse(raw);
     if (data._cachedAt && Date.now() - data._cachedAt > 7 * 24 * 60 * 60 * 1000) {
-      localStorage.removeItem(STUDENT_CACHE_KEY);
-      return null;
+      localStorage.removeItem(STUDENT_CACHE_KEY); return null;
     }
     return data;
   } catch { return null; }
 }
 
-function clearStudentCache() {
-  try { localStorage.removeItem(STUDENT_CACHE_KEY); } catch {}
-}
+function clearStudentCache() { try { localStorage.removeItem(STUDENT_CACHE_KEY); } catch {} }
 
 async function signInWithGoogle() {
   try {
@@ -659,11 +714,10 @@ async function signInWithGoogle() {
 
 async function signOutUser() {
   try { await fbSignOut(auth); } catch {}
-  currentUser = null;
-  currentProfile = null;
-  currentStudentProfile = null;
-  clearProfileCache();
-  clearStudentCache();
+  currentUser = null; currentProfile = null; currentStudentProfile = null; currentCredits = null;
+  isUserAdmin = false;
+  if (creditsUnsub) { try { creditsUnsub(); } catch {} creditsUnsub = null; }
+  clearProfileCache(); clearStudentCache();
   try {
     sessionStorage.removeItem("qeyasquiz.lastAttempt");
     localStorage.removeItem("qeyasquiz.lastAttempt");
@@ -697,15 +751,9 @@ async function saveStudentProfile(uid, fullName) {
     role: "student",
     updatedAt: serverTimestamp()
   };
-
   const snap = await getDoc(studentRef);
-  if (snap.exists()) {
-    await updateDoc(studentRef, payload);
-  } else {
-    payload.createdAt = serverTimestamp();
-    await setDoc(studentRef, payload);
-  }
-
+  if (snap.exists()) await updateDoc(studentRef, payload);
+  else { payload.createdAt = serverTimestamp(); await setDoc(studentRef, payload); }
   const profile = { uid, fullName: fullName.trim(), email: user?.email || "", role: "student" };
   cacheStudentProfile(profile);
   return profile;
@@ -725,8 +773,7 @@ async function claimUsername(uid, username, profileData) {
     if (unameSnap.exists() && unameSnap.data().uid !== uid) throw new Error("USERNAME_TAKEN");
     tx.set(unameRef, { uid, createdAt: serverTimestamp() });
     tx.set(userRef, {
-      uid,
-      username,
+      uid, username,
       normalizedUsername: normalized,
       fullName: profileData.fullName,
       photoURL: profileData.photoURL || "",
@@ -748,7 +795,7 @@ async function listExams(uid, limitN = 100) {
       limit(limitN)
     ));
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  } catch (err) {
+  } catch {
     try {
       const snap = await getDocs(query(collection(db, "exams"), where("ownerId", "==", uid)));
       return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -786,10 +833,237 @@ async function getStudentAttempt(examId, studentUid) {
       limit(1)
     ));
     return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
-  } catch (err) {
-    console.error("[getStudentAttempt]", err);
-    return null;
+  } catch { return null; }
+}
+
+/* ============================================================
+   CREDITS
+   ============================================================ */
+function defaultCredits(uid) {
+  return {
+    uid, balance: 0, totalAdded: 0, totalSpent: 0,
+    monthlyGranted: 0, monthlySpent: 0,
+    lastTopUpAt: null, lastSpendAt: null
+  };
+}
+
+async function loadCredits(uid) {
+  try {
+    const snap = await getDoc(doc(db, "userCredits", uid));
+    return snap.exists() ? { uid, ...snap.data() } : defaultCredits(uid);
+  } catch { return defaultCredits(uid); }
+}
+
+async function ensureSignupBonus(uid) {
+  const creditRef = doc(db, "userCredits", uid);
+  const snap = await getDoc(creditRef);
+  if (snap.exists() && snap.data().signupBonusGranted) return;
+
+  const bonus = CREDIT_PACKS.free.credits;
+
+  await runTransaction(db, async (tx) => {
+    const current = await tx.get(creditRef);
+    if (current.exists() && current.data().signupBonusGranted) return;
+
+    const currentBalance = current.exists() ? (current.data().balance || 0) : 0;
+
+    tx.set(creditRef, {
+      uid,
+      balance: currentBalance + bonus,
+      totalAdded: bonus,
+      totalSpent: 0,
+      monthlyGranted: bonus,
+      monthlySpent: 0,
+      signupBonusGranted: true,
+      lastTopUpAt: serverTimestamp(),
+      createdAt: current.exists() ? (current.data().createdAt || serverTimestamp()) : serverTimestamp(),
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+
+    const txRef = doc(collection(db, "creditTransactions"));
+    tx.set(txRef, {
+      uid, type: "signup_bonus", amount: bonus,
+      source: "signup", note: "رصيد ترحيبي",
+      balanceAfter: currentBalance + bonus,
+      createdAt: serverTimestamp()
+    });
+  });
+}
+
+function startCreditsListener(uid) {
+  if (creditsUnsub) { try { creditsUnsub(); } catch {} creditsUnsub = null; }
+  creditsUnsub = onSnapshot(doc(db, "userCredits", uid), (snap) => {
+    currentCredits = snap.exists() ? { uid, ...snap.data() } : defaultCredits(uid);
+    updateCreditsUI();
+  }, (err) => console.warn("[credits listener]", err));
+}
+
+function stopCreditsListener() {
+  if (creditsUnsub) { try { creditsUnsub(); } catch {} creditsUnsub = null; }
+}
+
+function updateCreditsUI() {
+  const balance = currentCredits?.balance ?? 0;
+  const balanceStr = String(balance);
+
+  $$("[data-credit-balance]").forEach((e) => { e.textContent = balanceStr; });
+  $$("[data-side-credit-value]").forEach((e) => { e.textContent = balanceStr; });
+
+  const plan = currentProfile?.subscription?.plan || "free";
+  const expiry = currentProfile?.subscription?.expiresAt;
+
+  $$("[data-side-credit-plan]").forEach((e) => { e.textContent = planLabel(plan); });
+
+  $$("[data-side-credit-expiry]").forEach((e) => {
+    if (plan === "free" || !expiry) {
+      e.textContent = plan === "free" ? "باقة مجانية" : "";
+      return;
+    }
+    e.textContent = `ينتهي: ${fmtDateShort(expiry)}`;
+  });
+
+  const sideCard = $("[data-side-credit]");
+  if (sideCard) {
+    sideCard.classList.toggle("is-low", balance > 0 && balance < 20);
+    sideCard.classList.toggle("is-expired", balance <= 0);
   }
+
+  if (currentRoute === "/app/credits") renderCreditsPage();
+}
+
+function computeAICost(essayCount, studentCount) {
+  const total = essayCount * studentCount;
+  if (total <= 0) return 0;
+  return Math.max(1, Math.ceil(total / 10));
+}
+
+async function loadTransactions(uid, limitN = 50) {
+  try {
+    const snap = await getDocs(query(
+      collection(db, "creditTransactions"),
+      where("uid", "==", uid),
+      orderBy("createdAt", "desc"),
+      limit(limitN)
+    ));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch {
+    try {
+      const snap = await getDocs(query(collection(db, "creditTransactions"), where("uid", "==", uid)));
+      const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      arr.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      return arr.slice(0, limitN);
+    } catch { return []; }
+  }
+}
+
+/* ============================================================
+   AI QEYAS — CORE
+   ============================================================ */
+async function getAuthToken() {
+  if (!auth.currentUser) throw new Error("NOT_AUTHED");
+  return await auth.currentUser.getIdToken();
+}
+
+/* ---------- AI QUEUE ---------- */
+const AI_QUEUE_DOC_PATH = ["_meta", "aiRateLimit"];
+
+async function readAISlots() {
+  try {
+    const ref = doc(db, AI_QUEUE_DOC_PATH[0], AI_QUEUE_DOC_PATH[1]);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return { activeUids: [] };
+    const data = snap.data();
+    return { activeUids: Array.isArray(data.activeUids) ? data.activeUids : [] };
+  } catch {
+    return { activeUids: [] };
+  }
+}
+
+async function claimAISlot() {
+  const uidV = currentUser.uid;
+  const ref = doc(db, AI_QUEUE_DOC_PATH[0], AI_QUEUE_DOC_PATH[1]);
+
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      const data = snap.exists() ? snap.data() : { activeUids: [] };
+      const active = (data.activeUids || []).filter((id) => id !== uidV);
+
+      if (active.length >= AI_CONSTANTS.MAX_CONCURRENT_AI) {
+        throw new Error("QUEUE_FULL");
+      }
+
+      tx.set(ref, {
+        activeUids: [...active, uidV],
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    });
+    return true;
+  } catch (err) {
+    if (err.message === "QUEUE_FULL") return false;
+    console.warn("[ai queue] claim failed:", err);
+    // لو القواعد منعت، نرجع true عشان نسمح بالتنفيذ (fallback)
+    return true;
+  }
+}
+
+async function releaseAISlot() {
+  const uidV = currentUser.uid;
+  const ref = doc(db, AI_QUEUE_DOC_PATH[0], AI_QUEUE_DOC_PATH[1]);
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) return;
+      const data = snap.data();
+      const active = (data.activeUids || []).filter((id) => id !== uidV);
+      tx.set(ref, { activeUids: active, updatedAt: serverTimestamp() }, { merge: true });
+    });
+  } catch (err) { console.warn("[ai queue] release failed:", err); }
+}
+
+async function waitForAISlot(onTick) {
+  const start = Date.now();
+  while (Date.now() - start < AI_CONSTANTS.QUEUE_MAX_WAIT_SEC * 1000) {
+    const slots = await readAISlots();
+    const active = (slots.activeUids || []).filter((id) => id !== currentUser?.uid);
+    const position = active.length + 1;
+    const waitSec = Math.max(AI_CONSTANTS.QUEUE_POLL_INTERVAL / 1000, position * 20);
+
+    if (onTick) onTick({ position, waitSec });
+
+    if (active.length < AI_CONSTANTS.MAX_CONCURRENT_AI) {
+      return true;
+    }
+
+    await new Promise((r) => setTimeout(r, AI_CONSTANTS.QUEUE_POLL_INTERVAL));
+  }
+  return false;
+}
+
+/* ---------- BATCH GRADING ---------- */
+async function aiGradeBatch(payload) {
+  const token = await getAuthToken();
+  const res = await fetch("/api/ai/qeyas-grade", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const body = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    const code = body?.error || "AI_FAILED";
+    const err = new Error(code);
+    err.code = code;
+    err.status = res.status;
+    err.details = body;
+    throw err;
+  }
+
+  return body;
 }
 
 /* ============================================================
@@ -844,12 +1118,8 @@ async function uploadToCloudinary(file, folder, maxBytes = 2 * 1024 * 1024) {
   if (!UPLOAD.cloudName) throw new Error("CONFIG_MISSING");
 
   let sign;
-  try {
-    sign = await getUploadSignature(folder);
-  } catch (err) {
-    console.error("[upload] signature step failed:", err);
-    throw new Error("SIGN_FAILED");
-  }
+  try { sign = await getUploadSignature(folder); }
+  catch (err) { console.error("[upload] sign failed:", err); throw new Error("SIGN_FAILED"); }
 
   const formData = new FormData();
   formData.append("file", file);
@@ -861,26 +1131,12 @@ async function uploadToCloudinary(file, folder, maxBytes = 2 * 1024 * 1024) {
   const endpoint = `https://api.cloudinary.com/v1_1/${sign.cloudName}/image/upload`;
 
   let res;
-  try {
-    res = await fetch(endpoint, {
-      method: "POST",
-      body: formData,
-      mode: "cors"
-    });
-  } catch (err) {
-    console.error("[upload] network error:", err);
-    throw new Error("NETWORK_ERROR");
-  }
+  try { res = await fetch(endpoint, { method: "POST", body: formData, mode: "cors" }); }
+  catch { throw new Error("NETWORK_ERROR"); }
 
   const body = await res.json().catch(() => ({}));
-
-  if (!res.ok) {
-    console.error("[upload] rejected:", { status: res.status, response: body });
-    throw new Error("UPLOAD_FAILED");
-  }
-
+  if (!res.ok) { console.error("[upload] rejected:", { status: res.status, response: body }); throw new Error("UPLOAD_FAILED"); }
   if (!body.secure_url) throw new Error("UPLOAD_INCOMPLETE");
-
   return body.secure_url;
 }
 
@@ -892,19 +1148,14 @@ function uploadErrorMessage(err, maxLabel = "") {
   if (msg === "TOO_LARGE") return `حجم الصورة أكبر من الحد المسموح${suffix}`;
   if (msg === "CONFIG_MISSING") return "الإعدادات غير مكتملة — تواصل مع الدعم";
   if (msg === "SIGN_FAILED" || msg === "SIGN_INVALID") return "تعذّر تجهيز الرفع — حاول مرة أخرى";
-  if (msg === "NETWORK_ERROR") return "تعذّر الاتصال بالخادم — تحقق من الإنترنت أو عطّل مانع الإعلانات";
+  if (msg === "NETWORK_ERROR") return "تعذّر الاتصال بالخادم — تحقق من الإنترنت";
   if (msg === "UPLOAD_INCOMPLETE") return "الرفع لم يكتمل — حاول مرة أخرى";
   if (msg === "UPLOAD_FAILED") return "فشل رفع الصورة — حاول مرة أخرى";
   return "تعذّر رفع الصورة — حاول مرة أخرى";
 }
 
-async function uploadAvatar(uid, file) {
-  return uploadToCloudinary(file, `${UPLOAD.avatarFolder}/${uid}`, 2 * 1024 * 1024);
-}
-
-async function uploadQuestionImage(examId, file) {
-  return uploadToCloudinary(file, `${UPLOAD.questionFolder}/${examId || "draft"}`, 5 * 1024 * 1024);
-}
+async function uploadAvatar(uid, file) { return uploadToCloudinary(file, `${UPLOAD.avatarFolder}/${uid}`, 2 * 1024 * 1024); }
+async function uploadQuestionImage(examId, file) { return uploadToCloudinary(file, `${UPLOAD.questionFolder}/${examId || "draft"}`, 5 * 1024 * 1024); }
 
 /* ============================================================
    ROUTER
@@ -919,9 +1170,13 @@ const ROUTES = {
   "/app/exam": { page: "app", view: "exam-details" },
   "/app/grading": { page: "app", view: "grading" },
   "/app/bank": { page: "app", view: "bank" },
+  "/app/ai-qeyas": { page: "app", view: "ai-qeyas" },
   "/app/profile": { page: "app", view: "profile" },
   "/app/settings": { page: "app", view: "settings" },
-  "/app/support": { page: "app", view: "support" },
+  "/app/credits": { page: "app", view: "credits" },
+  "/app/subscription": { page: "app", view: "subscription" },
+  "/app/checkout": { page: "app", view: "checkout" },
+  "/app/admin": { page: "app", view: "admin" },
   "/exam": { page: "exam" },
   "/result": { page: "result" }
 };
@@ -965,9 +1220,13 @@ function handleRoute() {
       "exam-details": "تفاصيل الامتحان",
       grading: "التصحيح",
       bank: "بنك الأسئلة",
+      "ai-qeyas": "AI Qeyas",
       profile: "الملف الشخصي",
       settings: "الإعدادات",
-      support: "ادعمنا"
+      credits: "الرصيد والباقات",
+      subscription: "الباقات",
+      checkout: "الدفع",
+      admin: "لوحة الأدمن"
     };
     const titleEl = $("[data-page-title]");
     if (titleEl) titleEl.textContent = titleMap[route.view] || "";
@@ -1000,9 +1259,7 @@ function setTheme(theme) {
   document.documentElement.dataset.theme = theme;
 }
 
-function toggleTheme() {
-  setTheme(currentTheme === "dark" ? "light" : "dark");
-}
+function toggleTheme() { setTheme(currentTheme === "dark" ? "light" : "dark"); }
 
 /* ============================================================
    AUTH STATE
@@ -1013,21 +1270,26 @@ onAuthStateChanged(auth, async (user) => {
   currentUser = user;
 
   if (!user) {
-    currentProfile = null;
-    currentStudentProfile = null;
-    clearProfileCache();
-    clearStudentCache();
+    currentProfile = null; currentStudentProfile = null; currentCredits = null;
+    isUserAdmin = false;
+    stopCreditsListener();
+    clearProfileCache(); clearStudentCache();
     authResolved = true;
     hideGlobalLoading();
 
     const isStudentOrPublic = ["/", "/login", "/exam", "/result"].includes(currentRoute);
-    if (!isStudentOrPublic) {
-      navigate("/login");
-    } else if (currentRoute && routeHandlers[currentRoute]) {
+    if (!isStudentOrPublic) navigate("/login");
+    else if (currentRoute && routeHandlers[currentRoute]) {
       Promise.resolve(routeHandlers[currentRoute](currentParams || new URLSearchParams())).catch(() => {});
     }
     return;
   }
+
+  // فحص الأدمن بالإيميل
+  isUserAdmin = isAdminEmail(user.email);
+  document.querySelectorAll("[data-admin-only]").forEach((node) => {
+    node.hidden = !isUserAdmin;
+  });
 
   const cachedTeacher = getCachedProfile();
   const cachedStudent = getCachedStudentProfile();
@@ -1039,13 +1301,28 @@ onAuthStateChanged(auth, async (user) => {
     authResolved = true;
     hideGlobalLoading();
     updateUserUI(currentProfile, user);
+    startCreditsListener(user.uid);
     resolveAuthRoute();
 
-    loadProfile(user.uid).then((fresh) => {
+    loadProfile(user.uid).then(async (fresh) => {
       if (fresh) {
         currentProfile = fresh;
         cacheProfile(fresh);
         updateUserUI(fresh, user);
+
+        if (!fresh.publicId) {
+          try {
+            const newPublicId = await ensureUserHasPublicId(user.uid);
+            if (newPublicId) {
+              currentProfile.publicId = newPublicId;
+              cacheProfile(currentProfile);
+              updateUserUI(currentProfile, user);
+            }
+          } catch {}
+        }
+
+        try { await ensureSignupBonus(user.uid); } catch {}
+
         if (currentRoute && currentRoute.startsWith("/app/") && routeHandlers[currentRoute]) {
           Promise.resolve(routeHandlers[currentRoute](currentParams || new URLSearchParams())).catch(() => {});
         }
@@ -1053,10 +1330,7 @@ onAuthStateChanged(auth, async (user) => {
     }).catch(() => {});
 
     loadStudentProfile(user.uid).then((fresh) => {
-      if (fresh) {
-        currentStudentProfile = fresh;
-        cacheStudentProfile(fresh);
-      }
+      if (fresh) { currentStudentProfile = fresh; cacheStudentProfile(fresh); }
     }).catch(() => {});
     return;
   }
@@ -1073,12 +1347,27 @@ onAuthStateChanged(auth, async (user) => {
     currentProfile = teacherProfile;
     currentStudentProfile = studentProfile;
 
-    if (teacherProfile) cacheProfile(teacherProfile);
+    if (teacherProfile) {
+      cacheProfile(teacherProfile);
+
+      if (!teacherProfile.publicId) {
+        try {
+          const newPublicId = await ensureUserHasPublicId(user.uid);
+          if (newPublicId) {
+            currentProfile.publicId = newPublicId;
+            cacheProfile(currentProfile);
+          }
+        } catch {}
+      }
+
+      try { await ensureSignupBonus(user.uid); } catch {}
+      startCreditsListener(user.uid);
+    }
+
     if (studentProfile) cacheStudentProfile(studentProfile);
   } catch (err) {
     console.warn("[auth] load profiles failed", err);
-    currentProfile = null;
-    currentStudentProfile = null;
+    currentProfile = null; currentStudentProfile = null;
   }
 
   authResolved = true;
@@ -1109,14 +1398,12 @@ function resolveAuthRoute() {
       }
       return;
     }
-
     if (currentRoute === "/setup") {
       if (routeHandlers[currentRoute]) {
         Promise.resolve(routeHandlers[currentRoute](currentParams || new URLSearchParams())).catch(() => {});
       }
       return;
     }
-
     navigate("/setup");
     return;
   }
@@ -1135,9 +1422,13 @@ function updateUserUI(profile, user) {
   const name = profile?.fullName || user?.displayName || "";
   const handle = "@" + (profile?.username || "");
   const photo = profile?.photoURL || user?.photoURL || "";
+  const publicId = profile?.publicId ? String(profile.publicId) : "—";
+
   $$("[data-user-name]").forEach((e) => (e.textContent = name));
   $$("[data-user-handle]").forEach((e) => (e.textContent = handle));
+  $$("[data-user-id]").forEach((e) => (e.textContent = `ID: ${publicId}`));
   $$("[data-user-avatar]").forEach((e) => { if (photo) e.src = photo; });
+  $$("[data-profile-id]").forEach((e) => { e.textContent = publicId; });
 }
 
 /* ============================================================
@@ -1186,9 +1477,8 @@ function initLogin() {
     errBox.hidden = true;
     status.hidden = false;
     btn.classList.add("is-loading");
-    try {
-      await signInWithGoogle();
-    } catch (err) {
+    try { await signInWithGoogle(); }
+    catch (err) {
       status.hidden = true;
       btn.classList.remove("is-loading");
       errBox.hidden = false;
@@ -1258,10 +1548,7 @@ function initSetup() {
       chip.appendChild(document.createTextNode(name));
       const rm = el("button", { type: "button", class: "chip-remove", "aria-label": "حذف" });
       rm.appendChild(svgIcon("x", 10));
-      rm.addEventListener("click", () => {
-        customSubjects.splice(i, 1);
-        renderCustomChips();
-      });
+      rm.addEventListener("click", () => { customSubjects.splice(i, 1); renderCustomChips(); });
       chip.appendChild(rm);
       customChips.appendChild(chip);
     });
@@ -1291,13 +1578,8 @@ function initSetup() {
     try {
       const ok = await checkUsernameAvailability(val);
       usernameStatus.classList.remove("is-checking");
-      if (ok) {
-        usernameStatus.textContent = "متاح";
-        usernameStatus.classList.add("is-available");
-      } else {
-        usernameStatus.textContent = "مأخوذ";
-        usernameStatus.classList.add("is-taken");
-      }
+      if (ok) { usernameStatus.textContent = "متاح"; usernameStatus.classList.add("is-available"); }
+      else { usernameStatus.textContent = "مأخوذ"; usernameStatus.classList.add("is-taken"); }
     } catch { usernameStatus.textContent = ""; }
   }, 400);
 
@@ -1329,10 +1611,7 @@ function initSetup() {
     }
 
     const fullName = fullNameInput.value.trim();
-    if (fullName.length < 3) {
-      toast("أدخل اسمك الكامل", "warning");
-      ok = false;
-    }
+    if (fullName.length < 3) { toast("أدخل اسمك الكامل", "warning"); ok = false; }
 
     if (setupState.selectedSubjects.length === 0 && customSubjects.length === 0) {
       subjectsError.hidden = false;
@@ -1347,24 +1626,20 @@ function initSetup() {
     try {
       let photoURL = currentUser?.photoURL || "";
       if (setupState.photoFile) {
-        try {
-          photoURL = await uploadAvatar(currentUser.uid, setupState.photoFile);
-        } catch (err) {
-          console.warn(err);
-          toast(uploadErrorMessage(err, "2 ميجابايت") + " — سيتم استخدام صورة Google", "warning", 6000);
-        }
+        try { photoURL = await uploadAvatar(currentUser.uid, setupState.photoFile); }
+        catch (err) { toast(uploadErrorMessage(err, "2 ميجابايت") + " — سيتم استخدام صورة Google", "warning", 6000); }
       }
 
-      const allSubjects = [
-        ...setupState.selectedSubjects,
-        ...customSubjects.map((name) => "custom:" + name)
-      ];
-
+      const allSubjects = [...setupState.selectedSubjects, ...customSubjects.map((name) => "custom:" + name)];
       await claimUsername(currentUser.uid, uname, { fullName, photoURL, subjects: allSubjects });
+
+      try { await ensureUserHasPublicId(currentUser.uid); } catch {}
+      try { await ensureSignupBonus(currentUser.uid); } catch {}
 
       currentProfile = await loadProfile(currentUser.uid);
       if (currentProfile) cacheProfile(currentProfile);
       updateUserUI(currentProfile, currentUser);
+      startCreditsListener(currentUser.uid);
       toast("تم حفظ الملف", "success");
       navigate("/app/dashboard");
     } catch (err) {
@@ -1418,10 +1693,7 @@ async function renderDashboard() {
       recentHost.appendChild(el("div", { class: "empty" }, [
         el("h3", { text: "لا توجد امتحانات بعد" }),
         el("p", { text: "أنشئ أول امتحان للبدء." }),
-        el("button", {
-          class: "btn btn-primary", type: "button", text: "إنشاء امتحان",
-          onclick: () => navigate("/app/builder")
-        })
+        el("button", { class: "btn btn-primary", type: "button", text: "إنشاء امتحان", onclick: () => navigate("/app/builder") })
       ]));
     } else {
       exams.slice(0, 6).forEach((exam) => recentHost.appendChild(buildExamCard(exam)));
@@ -1508,10 +1780,7 @@ function applyExamFilters() {
   examsState.filtered = arr;
 
   list.innerHTML = "";
-  if (!arr.length) {
-    empty.hidden = false;
-    return;
-  }
+  if (!arr.length) { empty.hidden = false; return; }
   empty.hidden = true;
   arr.forEach((exam) => list.appendChild(buildExamCard(exam)));
 }
@@ -1552,6 +1821,8 @@ async function renderBuilder(params) {
           const ans = answersMap[q.id] || {};
           return {
             ...q,
+            header: q.header || "",
+            explanation: q.explanation || "",
             correctIndex: ans.correctIndex ?? 0,
             correctBool: ans.correctBool ?? null,
             correctText: ans.correctText || "",
@@ -1583,7 +1854,6 @@ async function renderBuilder(params) {
 
 function renderBuilderUI() {
   const d = builderState.data;
-
   const setVal = (sel, v) => { const e = $(sel); if (e) e.value = v ?? ""; };
   setVal("#examTitle", d.title);
   setVal("#examGrade", d.grade);
@@ -1680,18 +1950,14 @@ function renderBuilderQuestions() {
     ]));
     return;
   }
-
   questions.forEach((q, idx) => host.appendChild(buildQuestionCard(q, idx)));
 }
 
 function qTypeLabel(type) {
   return {
-    mcq: "اختيار من متعدد",
-    mcq_just: "اختيار + تبرير",
-    tf: "صح / خطأ",
-    tf_just: "صح / خطأ + تبرير",
-    complete: "أكمل",
-    essay: "مقالي"
+    mcq: "اختيار من متعدد", mcq_just: "اختيار + تبرير",
+    tf: "صح / خطأ", tf_just: "صح / خطأ + تبرير",
+    complete: "أكمل", essay: "مقالي"
   }[type] || type;
 }
 
@@ -1719,12 +1985,10 @@ function buildQuestionCard(q, idx) {
   dup.appendChild(svgIcon("duplicate", 16));
   dup.addEventListener("click", () => duplicateQuestion(idx));
   actions.appendChild(dup);
-
   const del = el("button", { class: "icon-btn", type: "button", title: "حذف" });
   del.appendChild(svgIcon("trash", 16));
   del.addEventListener("click", () => deleteQuestion(idx));
   actions.appendChild(del);
-
   head.appendChild(actions);
   card.appendChild(head);
 
@@ -1746,10 +2010,8 @@ function buildQuestionCard(q, idx) {
 
   function markQuestionUnsaved() {
     if (q._saved !== false) {
-      q._saved = false;
-      q._error = false;
-      updateSaveBtn();
-      updateCardStatus();
+      q._saved = false; q._error = false;
+      updateSaveBtn(); updateCardStatus();
     }
   }
 
@@ -1758,8 +2020,7 @@ function buildQuestionCard(q, idx) {
     try {
       const err = validateSingleQuestion(q);
       if (err) {
-        q._error = true;
-        updateCardStatus();
+        q._error = true; updateCardStatus();
         toast(err, "warning");
         saveBtn.classList.remove("is-loading");
         return;
@@ -1767,20 +2028,16 @@ function buildQuestionCard(q, idx) {
       q._error = false;
       await saveSingleQuestion(q);
       q._saved = true;
-      updateSaveBtn();
-      updateCardStatus();
+      updateSaveBtn(); updateCardStatus();
       toast("تم حفظ السؤال والإجابة", "success");
     } catch (err) {
       console.error("[saveQuestion]", err);
-      q._error = true;
-      updateCardStatus();
+      q._error = true; updateCardStatus();
       const reason = err?.message === "Could not create exam"
         ? "تعذّر إنشاء مسودة الامتحان — جرب تحفظ الكل أولاً"
         : err?.message || "خطأ في الشبكة";
       toast(`فشل حفظ السؤال ${idx + 1}: ${reason}`, "error", 6000);
-    } finally {
-      saveBtn.classList.remove("is-loading");
-    }
+    } finally { saveBtn.classList.remove("is-loading"); }
   });
 
   updateSaveBtn();
@@ -1789,15 +2046,29 @@ function buildQuestionCard(q, idx) {
 
   const body = el("div", { class: "question-body" });
 
-  const ta = el("textarea", { class: "textarea" });
-  ta.placeholder = "نص السؤال…";
-  ta.value = q.text || "";
-  ta.addEventListener("input", () => {
-    q.text = ta.value;
-    markQuestionUnsaved();
-    markDirty();
+  const headerField = el("div", { class: "field" });
+  const headerLabel = el("label", { class: "field-label" });
+  headerLabel.appendChild(document.createTextNode("رأس السؤال "));
+  headerLabel.appendChild(el("span", { class: "text-danger", text: "*" }));
+  headerField.appendChild(headerLabel);
+  const headerInput = el("input", {
+    type: "text", class: "input", maxlength: "200",
+    placeholder: "مثال: بم تفسر، أعرب كلمة، اذكر السبب، اختر الإجابة الصحيحة…"
   });
-  body.appendChild(ta);
+  headerInput.value = q.header || "";
+  headerInput.addEventListener("input", () => { q.header = headerInput.value; markQuestionUnsaved(); markDirty(); });
+  headerField.appendChild(headerInput);
+  headerField.appendChild(el("p", { class: "field-hint", text: "يظهر للطالب قبل نص السؤال — يوضح هدف السؤال." }));
+  body.appendChild(headerField);
+
+  const textField = el("div", { class: "field" });
+  textField.appendChild(el("label", { class: "field-label", text: "نص السؤال" }));
+  const ta = el("textarea", { class: "textarea" });
+  ta.placeholder = "اكتب نص السؤال…";
+  ta.value = q.text || "";
+  ta.addEventListener("input", () => { q.text = ta.value; markQuestionUnsaved(); markDirty(); });
+  textField.appendChild(ta);
+  body.appendChild(textField);
 
   const imgField = el("div", { class: "field" });
   const imgRow = el("div", { class: "row" });
@@ -1809,13 +2080,8 @@ function buildQuestionCard(q, idx) {
       toast("جارٍ الرفع…", "info", 2000);
       const url = await uploadQuestionImage(builderState.examId, f);
       q.imageUrl = url;
-      markQuestionUnsaved();
-      renderBuilderQuestions();
-      markDirty();
-    } catch (err) {
-      console.error(err);
-      toast(uploadErrorMessage(err, "5 ميجابايت"), "error", 7000);
-    }
+      markQuestionUnsaved(); renderBuilderQuestions(); markDirty();
+    } catch (err) { toast(uploadErrorMessage(err, "5 ميجابايت"), "error", 7000); }
   });
   const uploadBtn = el("button", { class: "btn btn-outline btn-sm", type: "button" });
   uploadBtn.appendChild(svgIcon("image", 14));
@@ -1828,10 +2094,7 @@ function buildQuestionCard(q, idx) {
     const rm = el("button", { class: "icon-btn", type: "button" });
     rm.appendChild(svgIcon("x", 14));
     rm.addEventListener("click", () => {
-      q.imageUrl = null;
-      markQuestionUnsaved();
-      renderBuilderQuestions();
-      markDirty();
+      q.imageUrl = null; markQuestionUnsaved(); renderBuilderQuestions(); markDirty();
     });
     imgRow.appendChild(rm);
   }
@@ -1845,20 +2108,12 @@ function buildQuestionCard(q, idx) {
       const row = el("div", { class: "option-row" });
       const radio = el("input", { type: "radio", name: "correct_" + q.id });
       radio.checked = q.correctIndex === i;
-      radio.addEventListener("change", () => {
-        q.correctIndex = i;
-        markQuestionUnsaved();
-        markDirty();
-      });
+      radio.addEventListener("change", () => { q.correctIndex = i; markQuestionUnsaved(); markDirty(); });
       row.appendChild(radio);
       row.appendChild(el("span", { class: "option-label", text: String.fromCharCode(65 + i) }));
       const inp = el("input", { type: "text", class: "input", value: opt || "" });
       inp.placeholder = "خيار " + String.fromCharCode(65 + i);
-      inp.addEventListener("input", () => {
-        q.options[i] = inp.value;
-        markQuestionUnsaved();
-        markDirty();
-      });
+      inp.addEventListener("input", () => { q.options[i] = inp.value; markQuestionUnsaved(); markDirty(); });
       row.appendChild(inp);
 
       const delBtn = el("button", { class: "icon-btn", type: "button" });
@@ -1867,9 +2122,7 @@ function buildQuestionCard(q, idx) {
         q.options.splice(i, 1);
         if (q.correctIndex === i) q.correctIndex = 0;
         else if (q.correctIndex > i) q.correctIndex--;
-        markQuestionUnsaved();
-        renderBuilderQuestions();
-        markDirty();
+        markQuestionUnsaved(); renderBuilderQuestions(); markDirty();
       });
       row.appendChild(delBtn);
       opts.appendChild(row);
@@ -1882,9 +2135,7 @@ function buildQuestionCard(q, idx) {
       addBtn.addEventListener("click", () => {
         q.options = q.options || [];
         q.options.push("");
-        markQuestionUnsaved();
-        renderBuilderQuestions();
-        markDirty();
+        markQuestionUnsaved(); renderBuilderQuestions(); markDirty();
       });
       opts.appendChild(addBtn);
     }
@@ -1896,11 +2147,7 @@ function buildQuestionCard(q, idx) {
       const jTa = el("textarea", { class: "textarea" });
       jTa.placeholder = "اكتب التبرير المثالي المتوقع من الطالب…";
       jTa.value = q.justificationModelAnswer || "";
-      jTa.addEventListener("input", () => {
-        q.justificationModelAnswer = jTa.value;
-        markQuestionUnsaved();
-        markDirty();
-      });
+      jTa.addEventListener("input", () => { q.justificationModelAnswer = jTa.value; markQuestionUnsaved(); markDirty(); });
       jField.appendChild(jTa);
       body.appendChild(jField);
     }
@@ -1912,11 +2159,7 @@ function buildQuestionCard(q, idx) {
       const row = el("div", { class: "option-row" });
       const radio = el("input", { type: "radio", name: "tf_" + q.id });
       radio.checked = q.correctBool === v;
-      radio.addEventListener("change", () => {
-        q.correctBool = v;
-        markQuestionUnsaved();
-        markDirty();
-      });
+      radio.addEventListener("change", () => { q.correctBool = v; markQuestionUnsaved(); markDirty(); });
       row.appendChild(radio);
       row.appendChild(el("span", { text: l }));
       wrap.appendChild(row);
@@ -1929,11 +2172,7 @@ function buildQuestionCard(q, idx) {
       const jTa = el("textarea", { class: "textarea" });
       jTa.placeholder = "اكتب التبرير المثالي المتوقع من الطالب…";
       jTa.value = q.justificationModelAnswer || "";
-      jTa.addEventListener("input", () => {
-        q.justificationModelAnswer = jTa.value;
-        markQuestionUnsaved();
-        markDirty();
-      });
+      jTa.addEventListener("input", () => { q.justificationModelAnswer = jTa.value; markQuestionUnsaved(); markDirty(); });
       jField.appendChild(jTa);
       body.appendChild(jField);
     }
@@ -1943,11 +2182,7 @@ function buildQuestionCard(q, idx) {
     const f = el("div", { class: "field" });
     f.appendChild(el("label", { class: "field-label", text: "الإجابة الصحيحة" }));
     const inp = el("input", { type: "text", class: "input", value: q.correctText || "" });
-    inp.addEventListener("input", () => {
-      q.correctText = inp.value;
-      markQuestionUnsaved();
-      markDirty();
-    });
+    inp.addEventListener("input", () => { q.correctText = inp.value; markQuestionUnsaved(); markDirty(); });
     f.appendChild(inp);
     body.appendChild(f);
   }
@@ -1957,14 +2192,19 @@ function buildQuestionCard(q, idx) {
     f.appendChild(el("label", { class: "field-label", text: "الإجابة النموذجية" }));
     const txt = el("textarea", { class: "textarea" });
     txt.value = q.modelAnswer || "";
-    txt.addEventListener("input", () => {
-      q.modelAnswer = txt.value;
-      markQuestionUnsaved();
-      markDirty();
-    });
+    txt.addEventListener("input", () => { q.modelAnswer = txt.value; markQuestionUnsaved(); markDirty(); });
     f.appendChild(txt);
     body.appendChild(f);
   }
+
+  const explanationField = el("div", { class: "field" });
+  explanationField.appendChild(el("label", { class: "field-label", text: "الشرح (اختياري)" }));
+  const expTa = el("textarea", { class: "textarea" });
+  expTa.placeholder = "اشرح الإجابة الصحيحة للطالب… (يظهر في صفحة النتيجة)";
+  expTa.value = q.explanation || "";
+  expTa.addEventListener("input", () => { q.explanation = expTa.value; markQuestionUnsaved(); markDirty(); });
+  explanationField.appendChild(expTa);
+  body.appendChild(explanationField);
 
   const scoreF = el("div", { class: "field" });
   scoreF.appendChild(el("label", { class: "field-label", text: "الدرجة" }));
@@ -1991,6 +2231,7 @@ function buildQuestionCard(q, idx) {
    VALIDATION + SAVE
    ============================================================ */
 function validateSingleQuestion(q) {
+  if (!q.header || !q.header.trim()) return "أدخل رأس السؤال (هدف السؤال)";
   if (!q.text || !q.text.trim()) return "أدخل نص السؤال";
 
   if (q.type === "mcq" || q.type === "mcq_just") {
@@ -2018,6 +2259,35 @@ function validateSingleQuestion(q) {
   return null;
 }
 
+function buildCleanFormQuestion(q) {
+  const out = {
+    id: q.id, type: q.type,
+    header: q.header || "",
+    text: q.text,
+    score: Number(q.score) || 0
+  };
+  if (q.explanation) out.explanation = q.explanation;
+  if (q.imageUrl) out.imageUrl = q.imageUrl;
+  if (q.type === "mcq" || q.type === "mcq_just") out.options = q.options || [];
+  return out;
+}
+
+function buildAnswerKey(allQuestions) {
+  const answerKey = {};
+  allQuestions.forEach((q) => {
+    const a = {};
+    if (q.type === "mcq" || q.type === "mcq_just") a.correctIndex = q.correctIndex;
+    else if (q.type === "tf" || q.type === "tf_just") a.correctBool = q.correctBool;
+    else if (q.type === "complete") a.correctText = q.correctText || "";
+    else if (q.type === "essay") a.modelAnswer = q.modelAnswer || "";
+    if (q.type === "mcq_just" || q.type === "tf_just") {
+      a.justificationModelAnswer = q.justificationModelAnswer || "";
+    }
+    answerKey[q.id] = a;
+  });
+  return answerKey;
+}
+
 async function saveSingleQuestion(q) {
   if (!currentProfile) throw new Error("Not logged in");
 
@@ -2027,52 +2297,27 @@ async function saveSingleQuestion(q) {
   }
   if (!builderState.examId) throw new Error("Could not create exam");
 
-  const answer = {};
-  if (q.type === "mcq" || q.type === "mcq_just") answer.correctIndex = q.correctIndex;
-  else if (q.type === "tf" || q.type === "tf_just") answer.correctBool = q.correctBool;
-  else if (q.type === "complete") answer.correctText = q.correctText || "";
-  else if (q.type === "essay") answer.modelAnswer = q.modelAnswer || "";
-
-  if (q.type === "mcq_just" || q.type === "tf_just") {
-    answer.justificationModelAnswer = q.justificationModelAnswer || "";
-  }
-
+  const answerKey = buildAnswerKey([q]);
   const answersRef = doc(db, "examAnswers", builderState.examId);
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(answersRef);
     const existing = snap.exists() ? (snap.data().answers || {}) : {};
-    existing[q.id] = answer;
+    const merged = { ...existing, ...answerKey };
     tx.set(answersRef, {
-      ownerId: currentProfile.uid,
-      examId: builderState.examId,
-      answers: existing,
-      updatedAt: serverTimestamp()
+      ownerId: currentProfile.uid, examId: builderState.examId,
+      answers: merged, updatedAt: serverTimestamp()
     });
   });
 
-  const examRef = doc(db, "exams", builderState.examId);
   const cleanForms = builderState.data.forms.map((form) => ({
-    id: form.id,
-    name: form.name,
-    questions: (form.questions || []).map((question) => {
-      const out = {
-        id: question.id,
-        type: question.type,
-        text: question.text,
-        score: Number(question.score) || 0
-      };
-      if (question.imageUrl) out.imageUrl = question.imageUrl;
-      if (question.type === "mcq" || question.type === "mcq_just") {
-        out.options = question.options || [];
-      }
-      return out;
-    })
+    id: form.id, name: form.name,
+    questions: (form.questions || []).map(buildCleanFormQuestion)
   }));
 
   const allQuestions = cleanForms.flatMap((f) => f.questions);
   const totalScore = allQuestions.reduce((s, qq) => s + (Number(qq.score) || 0), 0);
 
-  await updateDoc(examRef, {
+  await updateDoc(doc(db, "exams", builderState.examId), {
     forms: cleanForms,
     questions: cleanForms[0]?.questions || [],
     totalQuestions: allQuestions.length,
@@ -2087,19 +2332,8 @@ async function autosaveBuilderNow() {
   if (!d.title.trim()) return;
 
   const cleanForms = d.forms.map((form) => ({
-    id: form.id,
-    name: form.name,
-    questions: (form.questions || []).map((q) => {
-      const out = {
-        id: q.id,
-        type: q.type,
-        text: q.text,
-        score: Number(q.score) || 0
-      };
-      if (q.imageUrl) out.imageUrl = q.imageUrl;
-      if (q.type === "mcq" || q.type === "mcq_just") out.options = q.options || [];
-      return out;
-    })
+    id: form.id, name: form.name,
+    questions: (form.questions || []).map(buildCleanFormQuestion)
   }));
 
   const answerKey = {};
@@ -2123,9 +2357,7 @@ async function autosaveBuilderNow() {
 
   const examPayload = {
     ownerId: currentProfile.uid,
-    title: d.title,
-    subject: d.subject,
-    grade: d.grade,
+    title: d.title, subject: d.subject, grade: d.grade,
     duration: Number(d.duration) || 60,
     startAt: d.startAt instanceof Timestamp ? d.startAt : (d.startAt ? Timestamp.fromDate(new Date(d.startAt)) : null),
     endAt: d.endAt instanceof Timestamp ? d.endAt : (d.endAt ? Timestamp.fromDate(new Date(d.endAt)) : null),
@@ -2152,10 +2384,8 @@ async function autosaveBuilderNow() {
       const existing = snap.exists() ? (snap.data().answers || {}) : {};
       const merged = { ...existing, ...answerKey };
       tx.set(answersRef, {
-        ownerId: currentProfile.uid,
-        examId: builderState.examId,
-        answers: merged,
-        updatedAt: serverTimestamp()
+        ownerId: currentProfile.uid, examId: builderState.examId,
+        answers: merged, updatedAt: serverTimestamp()
       });
     });
   } else {
@@ -2163,10 +2393,8 @@ async function autosaveBuilderNow() {
     const ref = await addDoc(collection(db, "exams"), examPayload);
     builderState.examId = ref.id;
     await setDoc(doc(db, "examAnswers", ref.id), {
-      ownerId: currentProfile.uid,
-      examId: ref.id,
-      answers: answerKey,
-      updatedAt: serverTimestamp()
+      ownerId: currentProfile.uid, examId: ref.id,
+      answers: answerKey, updatedAt: serverTimestamp()
     });
     history.replaceState(null, "", `#/app/builder?id=${ref.id}`);
   }
@@ -2174,18 +2402,12 @@ async function autosaveBuilderNow() {
 
 function addQuestion(type) {
   const q = {
-    id: uid(10),
-    type,
-    text: "",
+    id: uid(10), type,
+    header: "", text: "", explanation: "",
     options: (type === "mcq" || type === "mcq_just") ? ["", "", "", ""] : [],
-    correctIndex: 0,
-    correctBool: null,
-    correctText: "",
-    modelAnswer: "",
-    justificationModelAnswer: "",
-    imageUrl: null,
-    score: 1,
-    _saved: false
+    correctIndex: 0, correctBool: null, correctText: "",
+    modelAnswer: "", justificationModelAnswer: "",
+    imageUrl: null, score: 1, _saved: false
   };
   const form = builderState.data.forms[builderState.currentFormIndex];
   form.questions.push(q);
@@ -2218,11 +2440,11 @@ function deleteQuestion(idx) {
 function showQuestionTypeModal() {
   const types = [
     { type: "mcq", title: "اختيار من متعدد", hint: "إجابة واحدة صحيحة" },
-    { type: "mcq_just", title: "اختيار + تبرير", hint: "اختيار مع كتابة تبرير (تصحيح يدوي)" },
+    { type: "mcq_just", title: "اختيار + تبرير", hint: "اختيار مع كتابة تبرير (تصحيح يدوي/AI)" },
     { type: "tf", title: "صح / خطأ", hint: "عبارة صح أو خطأ" },
-    { type: "tf_just", title: "صح / خطأ + تبرير", hint: "صح أو خطأ مع تبرير (تصحيح يدوي)" },
+    { type: "tf_just", title: "صح / خطأ + تبرير", hint: "صح أو خطأ مع تبرير (تصحيح يدوي/AI)" },
     { type: "complete", title: "أكمل", hint: "إكمال الفراغ" },
-    { type: "essay", title: "مقالي", hint: "إجابة طويلة (تصحيح يدوي)" }
+    { type: "essay", title: "مقالي", hint: "إجابة طويلة (تصحيح يدوي/AI)" }
   ];
 
   const body = el("div", { class: "stack-sm" });
@@ -2237,11 +2459,7 @@ function showQuestionTypeModal() {
     body.appendChild(btn);
   });
 
-  openModal({
-    title: "اختر نوع السؤال",
-    body,
-    actions: [{ label: "إلغاء", class: "btn-ghost" }]
-  });
+  openModal({ title: "اختر نوع السؤال", body, actions: [{ label: "إلغاء", class: "btn-ghost" }] });
 }
 
 function renderBuilderForms() {
@@ -2253,24 +2471,17 @@ function renderBuilderForms() {
 
   tabs.innerHTML = "";
   builderState.data.forms.forEach((form, i) => {
-    const tab = el("button", {
-      type: "button",
-      class: `forms-tab ${i === builderState.currentFormIndex ? "is-active" : ""}`
-    });
+    const tab = el("button", { type: "button", class: `forms-tab ${i === builderState.currentFormIndex ? "is-active" : ""}` });
     tab.appendChild(document.createTextNode(form.name));
     if (builderState.data.forms.length > 1) {
       const rm = el("span", { class: "forms-tab-remove" });
       rm.appendChild(svgIcon("x", 12));
-      rm.addEventListener("click", (e) => {
-        e.stopPropagation();
-        removeForm(i);
-      });
+      rm.addEventListener("click", (e) => { e.stopPropagation(); removeForm(i); });
       tab.appendChild(rm);
     }
     tab.addEventListener("click", () => {
       builderState.currentFormIndex = i;
-      renderBuilderForms();
-      renderBuilderQuestions();
+      renderBuilderForms(); renderBuilderQuestions();
     });
     tabs.appendChild(tab);
   });
@@ -2292,9 +2503,7 @@ function addForm() {
   const newForm = { id: nextLetter, name: `النموذج ${nextLetter}`, questions: [] };
   builderState.data.forms.push(newForm);
   builderState.currentFormIndex = builderState.data.forms.length - 1;
-  renderBuilderForms();
-  renderBuilderQuestions();
-  markDirty();
+  renderBuilderForms(); renderBuilderQuestions(); markDirty();
 }
 
 function removeForm(idx) {
@@ -2303,9 +2512,7 @@ function removeForm(idx) {
   if (builderState.currentFormIndex >= builderState.data.forms.length) {
     builderState.currentFormIndex = builderState.data.forms.length - 1;
   }
-  renderBuilderForms();
-  renderBuilderQuestions();
-  markDirty();
+  renderBuilderForms(); renderBuilderQuestions(); markDirty();
 }
 
 function markDirty() {
@@ -2320,19 +2527,8 @@ const autosaveBuilder = debounce(async () => {
   if (!d.title.trim()) return;
 
   const cleanForms = d.forms.map((form) => ({
-    id: form.id,
-    name: form.name,
-    questions: (form.questions || []).map((q) => {
-      const out = {
-        id: q.id,
-        type: q.type,
-        text: q.text,
-        score: Number(q.score) || 0
-      };
-      if (q.imageUrl) out.imageUrl = q.imageUrl;
-      if (q.type === "mcq" || q.type === "mcq_just") out.options = q.options || [];
-      return out;
-    })
+    id: form.id, name: form.name,
+    questions: (form.questions || []).map(buildCleanFormQuestion)
   }));
 
   const allQuestions = cleanForms.flatMap((f) => f.questions);
@@ -2340,9 +2536,7 @@ const autosaveBuilder = debounce(async () => {
 
   const examPayload = {
     ownerId: currentProfile.uid,
-    title: d.title,
-    subject: d.subject,
-    grade: d.grade,
+    title: d.title, subject: d.subject, grade: d.grade,
     duration: Number(d.duration) || 60,
     startAt: d.startAt instanceof Timestamp ? d.startAt : (d.startAt ? Timestamp.fromDate(new Date(d.startAt)) : null),
     endAt: d.endAt instanceof Timestamp ? d.endAt : (d.endAt ? Timestamp.fromDate(new Date(d.endAt)) : null),
@@ -2386,14 +2580,10 @@ async function saveAllQuestions() {
     await autosaveBuilderNow();
     await new Promise((r) => setTimeout(r, 400));
   }
-  if (!builderState.examId) {
-    toast("تعذّر إنشاء الامتحان", "error");
-    return;
-  }
+  if (!builderState.examId) { toast("تعذّر إنشاء الامتحان", "error"); return; }
 
   const allQ = getAllBuilderQuestions();
   const errors = [];
-
   allQ.forEach((q, idx) => {
     const err = validateSingleQuestion(q);
     if (err) errors.push(`س${idx + 1}: ${err}`);
@@ -2410,29 +2600,15 @@ async function saveAllQuestions() {
     return;
   }
 
-  const answerKey = {};
-  allQ.forEach((q) => {
-    const a = {};
-    if (q.type === "mcq" || q.type === "mcq_just") a.correctIndex = q.correctIndex;
-    else if (q.type === "tf" || q.type === "tf_just") a.correctBool = q.correctBool;
-    else if (q.type === "complete") a.correctText = q.correctText || "";
-    else if (q.type === "essay") a.modelAnswer = q.modelAnswer || "";
-    if (q.type === "mcq_just" || q.type === "tf_just") {
-      a.justificationModelAnswer = q.justificationModelAnswer || "";
-    }
-    answerKey[q.id] = a;
-  });
-
+  const answerKey = buildAnswerKey(allQ);
   const answersRef = doc(db, "examAnswers", builderState.examId);
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(answersRef);
     const existing = snap.exists() ? (snap.data().answers || {}) : {};
     const merged = { ...existing, ...answerKey };
     tx.set(answersRef, {
-      ownerId: currentProfile.uid,
-      examId: builderState.examId,
-      answers: merged,
-      updatedAt: serverTimestamp()
+      ownerId: currentProfile.uid, examId: builderState.examId,
+      answers: merged, updatedAt: serverTimestamp()
     });
   });
 
@@ -2451,9 +2627,7 @@ async function publishExam() {
   if (!totalQ) errors.push("أضف سؤالاً واحدًا على الأقل");
 
   const unsaved = getAllBuilderQuestions().filter((q) => !q._saved);
-  if (unsaved.length) {
-    errors.push(`فيه ${unsaved.length} سؤال مش محفوظ. اضغط "حفظ الكل" الأول.`);
-  }
+  if (unsaved.length) errors.push(`فيه ${unsaved.length} سؤال مش محفوظ. اضغط "حفظ الكل" الأول.`);
 
   if (errors.length) {
     openModal({
@@ -2471,10 +2645,7 @@ async function publishExam() {
     ["النماذج", String(d.forms.length)],
     ["المدة", `${d.duration} دقيقة`]
   ].forEach(([k, v]) => {
-    summary.appendChild(el("div", { class: "row-between" }, [
-      el("span", { text: k }),
-      el("strong", { text: v })
-    ]));
+    summary.appendChild(el("div", { class: "row-between" }, [el("span", { text: k }), el("strong", { text: v })]));
   });
 
   openModal({
@@ -2492,10 +2663,7 @@ async function publishExam() {
           const savedAnswers = answersSnap.data().answers || {};
           const requiredIds = getAllBuilderQuestions().map((q) => q.id);
           const missing = requiredIds.filter((id) => !savedAnswers[id]);
-          if (missing.length) {
-            toast(`فيه ${missing.length} سؤال مش محفوظ.`, "warning");
-            return false;
-          }
+          if (missing.length) { toast(`فيه ${missing.length} سؤال مش محفوظ.`, "warning"); return false; }
 
           await updateDoc(doc(db, "exams", builderState.examId), {
             status: "scheduled",
@@ -2505,9 +2673,7 @@ async function publishExam() {
           navigate(`/app/exam?id=${builderState.examId}`);
         } catch (err) {
           console.error(err);
-          const reason = err?.code === "permission-denied"
-            ? "ليس لديك صلاحية — أعد تسجيل الدخول"
-            : err?.message || "خطأ في الشبكة";
+          const reason = err?.code === "permission-denied" ? "ليس لديك صلاحية" : err?.message || "خطأ في الشبكة";
           toast(`فشل النشر: ${reason}`, "error", 6000);
         }
       }}
@@ -2540,19 +2706,14 @@ function initBuilderEvents() {
           if (!d.grade) { toast("اختر الصف", "warning"); return; }
         }
         if (builderState.currentStep === "questions" && !getAllBuilderQuestions().length) {
-          toast("أضف سؤالاً واحدًا على الأقل", "warning");
-          return;
+          toast("أضف سؤالاً واحدًا على الأقل", "warning"); return;
         }
         switchBuilderStep(BUILDER_STEPS[idx + 1]);
       }
       return;
     }
 
-    if (e.target.closest("[data-builder-save]")) {
-      autosaveBuilder();
-      toast("تم الحفظ", "success");
-      return;
-    }
+    if (e.target.closest("[data-builder-save]")) { autosaveBuilder(); toast("تم الحفظ", "success"); return; }
 
     if (e.target.closest("[data-builder-save-all]")) {
       const btn = e.target.closest("[data-builder-save-all]");
@@ -2571,8 +2732,7 @@ function initBuilderEvents() {
     }
 
     if (e.target.closest("[data-add-question]") || e.target.closest("[data-add-form-question]")) {
-      showQuestionTypeModal();
-      return;
+      showQuestionTypeModal(); return;
     }
 
     if (e.target.closest("[data-add-form]")) { addForm(); return; }
@@ -2656,21 +2816,17 @@ async function renderExamDetails(params) {
         });
         toast(newStatus === "active" ? "تم تفعيل الامتحان" : "تم إيقاف الامتحان", "success");
         renderExamDetails(currentParams);
-      } catch (err) {
-        console.error(err);
+      } catch {
         toast("تعذّر التحديث", "error");
         toggleInput.checked = !toggleInput.checked;
       }
     });
-
     const track = el("span", { class: "exam-status-toggle-track" }, [
       el("span", { class: "exam-status-toggle-thumb" })
     ]);
     toggleWrap.appendChild(toggleInput);
     toggleWrap.appendChild(track);
-    toggleWrap.appendChild(el("span", {
-      text: exam.manualStatus === "paused" ? "متوقف" : "نشط"
-    }));
+    toggleWrap.appendChild(el("span", { text: exam.manualStatus === "paused" ? "متوقف" : "نشط" }));
     actions.appendChild(toggleWrap);
   }
 
@@ -2742,99 +2898,23 @@ async function buildQuickReport(exam, attempts) {
     const avgPct = totalPossible ? Math.round((avg / totalPossible) * 100) : 0;
     const avgItem = el("div", { class: "quick-report-item is-success" });
     avgItem.appendChild(el("span", { class: "quick-report-label", text: "متوسط الدرجات" }));
-    avgItem.appendChild(el("span", {
-      class: "quick-report-value",
-      text: `${avg} / ${totalPossible}`
-    }));
-    avgItem.appendChild(el("span", {
-      class: "quick-report-sub",
-      text: `${avgPct}%`
-    }));
+    avgItem.appendChild(el("span", { class: "quick-report-value", text: `${avg} / ${totalPossible}` }));
+    avgItem.appendChild(el("span", { class: "quick-report-sub", text: `${avgPct}%` }));
     report.appendChild(avgItem);
 
-    const highest = graded.reduce((best, a) =>
-      (Number(a.score) || 0) > (Number(best.score) || 0) ? a : best
-    , graded[0]);
+    const highest = graded.reduce((best, a) => (Number(a.score) || 0) > (Number(best.score) || 0) ? a : best, graded[0]);
     const highItem = el("div", { class: "quick-report-item" });
     highItem.appendChild(el("span", { class: "quick-report-label", text: "أعلى درجة" }));
-    highItem.appendChild(el("span", {
-      class: "quick-report-value",
-      text: String(highest.score || 0)
-    }));
-    highItem.appendChild(el("span", {
-      class: "quick-report-sub",
-      text: highest.studentName || "—"
-    }));
+    highItem.appendChild(el("span", { class: "quick-report-value", text: String(highest.score || 0) }));
+    highItem.appendChild(el("span", { class: "quick-report-sub", text: highest.studentName || "—" }));
     report.appendChild(highItem);
 
-    const lowest = graded.reduce((worst, a) =>
-      (Number(a.score) || 0) < (Number(worst.score) || 0) ? a : worst
-    , graded[0]);
+    const lowest = graded.reduce((worst, a) => (Number(a.score) || 0) < (Number(worst.score) || 0) ? a : worst, graded[0]);
     const lowItem = el("div", { class: "quick-report-item is-danger" });
     lowItem.appendChild(el("span", { class: "quick-report-label", text: "أقل درجة" }));
-    lowItem.appendChild(el("span", {
-      class: "quick-report-value",
-      text: String(lowest.score || 0)
-    }));
-    lowItem.appendChild(el("span", {
-      class: "quick-report-sub",
-      text: lowest.studentName || "—"
-    }));
+    lowItem.appendChild(el("span", { class: "quick-report-value", text: String(lowest.score || 0) }));
+    lowItem.appendChild(el("span", { class: "quick-report-sub", text: lowest.studentName || "—" }));
     report.appendChild(lowItem);
-
-    const allQuestions = getAllExamQuestions(exam);
-    if (allQuestions.length && graded.length > 0) {
-      const answersMap = await getExamAnswers(exam.id);
-      const stats = allQuestions.map((q) => {
-        let correctCount = 0;
-        let attemptedCount = 0;
-        const key = answersMap[q.id] || {};
-
-        graded.forEach((a) => {
-          const ans = (a.answers || {})[q.id] || {};
-          if (q.type === "mcq" || q.type === "mcq_just") {
-            if (ans.selectedIndex != null) {
-              attemptedCount++;
-              if (ans.selectedIndex === key.correctIndex) correctCount++;
-            }
-          } else if (q.type === "tf" || q.type === "tf_just") {
-            if (ans.boolValue != null) {
-              attemptedCount++;
-              if (ans.boolValue === key.correctBool) correctCount++;
-            }
-          } else if (q.type === "complete") {
-            const norm = (v) => String(v || "").trim().toLowerCase();
-            if (ans.textValue && ans.textValue.trim()) {
-              attemptedCount++;
-              if (norm(ans.textValue) === norm(key.correctText)) correctCount++;
-            }
-          }
-        });
-
-        const successRate = attemptedCount ? (correctCount / attemptedCount) : 1;
-        return { q, correctCount, attemptedCount, successRate };
-      });
-
-      const hardest = stats
-        .filter((s) => s.attemptedCount > 0)
-        .sort((a, b) => a.successRate - b.successRate)
-        .slice(0, 3);
-
-      if (hardest.length && hardest[0].successRate < 0.5) {
-        const hardItem = el("div", { class: "quick-report-item is-warning" });
-        hardItem.appendChild(el("span", { class: "quick-report-label", text: "أصعب سؤال" }));
-        hardItem.appendChild(el("span", {
-          class: "quick-report-value is-small",
-          text: `س${allQuestions.indexOf(hardest[0].q) + 1}`
-        }));
-        const pct = Math.round(hardest[0].successRate * 100);
-        hardItem.appendChild(el("span", {
-          class: "quick-report-sub",
-          text: `${pct}% إجابة صحيحة`
-        }));
-        report.appendChild(hardItem);
-      }
-    }
   }
 
   return report;
@@ -2853,50 +2933,55 @@ function renderStudentsTab(host, exam, attempts) {
   const pendingCount = attempts.filter((a) => a.status === "submitted" && !a.gradedAt).length;
 
   const infoEl = el("div", { class: "text-sm text-muted" });
-  infoEl.textContent = pendingCount
-    ? `فيه ${pendingCount} ورقة بانتظار التصحيح`
-    : "كل الأوراق مصححة";
+  infoEl.textContent = pendingCount ? `فيه ${pendingCount} ورقة بانتظار التصحيح` : "كل الأوراق مصححة";
   toolbar.appendChild(infoEl);
 
-  const gradeAllBtn = el("button", {
-    type: "button",
-    class: "btn btn-primary btn-sm",
+  const actionsWrap = el("div", { class: "row", style: "gap:var(--sp-2)" });
+
+  const autoGradeBtn = el("button", {
+    type: "button", class: "btn btn-outline btn-sm",
     disabled: pendingCount === 0
   });
-  gradeAllBtn.appendChild(svgIcon("check", 14));
-  gradeAllBtn.appendChild(document.createTextNode(" تصحيح الكل"));
-  gradeAllBtn.addEventListener("click", async () => {
+  autoGradeBtn.appendChild(svgIcon("check", 14));
+  autoGradeBtn.appendChild(document.createTextNode(" تصحيح تلقائي للموضوعي"));
+  autoGradeBtn.addEventListener("click", async () => {
     if (pendingCount === 0) return;
-    gradeAllBtn.classList.add("is-loading");
+    autoGradeBtn.classList.add("is-loading");
     try {
-      const graded = await autoGradeAttempts(exam.id, exam);
-      if (graded > 0) {
-        toast(`تم تصحيح ${graded} ورقة`, "success");
-        renderExamDetails(currentParams);
-      } else {
-        toast("لا يوجد ما يستوجب التصحيح", "info");
-      }
+      const result = await autoGradeAttempts(exam.id, exam);
+      if (result.noAnswerKey) { toast("مفيش إجابات نموذجية محفوظة — احفظ إجابات الأسئلة أولاً", "error", 6000); return; }
+      if (result.alreadyDone) { toast("كل الأوراق مصححة بالفعل", "info"); return; }
+      if (result.graded > 0 && result.pendingManual === 0) toast(`تم تصحيح ${result.graded} ورقة`, "success");
+      else if (result.graded > 0 && result.pendingManual > 0) toast(`تم تصحيح ${result.graded} ورقة، و${result.pendingManual} ورقة فيها مقالات محتاجة تصحيح`, "warning", 7000);
+      else if (result.pendingManual > 0) toast(`كل الأوراق (${result.pendingManual}) فيها مقالات — استخدم AI Qeyas`, "info", 7000);
+      renderExamDetails(currentParams);
     } catch (err) {
       console.error(err);
       toast("فشل التصحيح", "error");
-    } finally {
-      gradeAllBtn.classList.remove("is-loading");
-    }
+    } finally { autoGradeBtn.classList.remove("is-loading"); }
   });
-  toolbar.appendChild(gradeAllBtn);
+  actionsWrap.appendChild(autoGradeBtn);
 
+  const hasEssays = getAllExamQuestions(exam).some(isEssay);
+  if (hasEssays) {
+    const aiGradeBtn = el("button", {
+      type: "button", class: "btn btn-gold btn-sm",
+      disabled: pendingCount === 0
+    });
+    aiGradeBtn.appendChild(svgIcon("sparkles", 14));
+    aiGradeBtn.appendChild(document.createTextNode(" تصحيح الكل بـ AI Qeyas"));
+    aiGradeBtn.addEventListener("click", () => runAIGradeAll(exam, attempts));
+    actionsWrap.appendChild(aiGradeBtn);
+  }
+
+  toolbar.appendChild(actionsWrap);
   host.appendChild(toolbar);
 
   const wrap = el("div", { class: "card", style: "overflow-x:auto" });
   const table = el("table", { class: "students-table" });
   table.innerHTML = `<thead><tr>
-    <th>الطالب</th>
-    <th>الحالة</th>
-    <th>البدء</th>
-    <th>التسليم</th>
-    <th>الدرجة</th>
-    <th>الأحداث</th>
-    <th>التفاصيل</th>
+    <th>الطالب</th><th>الحالة</th><th>البدء</th><th>التسليم</th><th>الدرجة</th>
+    <th>الأحداث</th><th>التفاصيل</th>
   </tr></thead>`;
   const tbody = el("tbody");
   const totalPossible = exam.totalScore || 0;
@@ -2916,31 +3001,18 @@ function renderStudentsTab(host, exam, attempts) {
       (e) => e.type === "tab_hidden" || e.type === "window_blur" || e.type === "fullscreen_exit"
     ).length;
     const eventsTd = el("td");
-    if (eventsCount === 0) {
-      eventsTd.appendChild(el("span", { class: "badge badge-graded", text: "نظيف" }));
-    } else {
-      const badgeClass = warningsCount >= 3 ? "badge-paused"
-        : warningsCount > 0 ? "badge-in_progress"
-        : "badge-draft";
-      eventsTd.appendChild(el("span", {
-        class: `badge ${badgeClass}`,
-        text: `${eventsCount} حدث`
-      }));
+    if (eventsCount === 0) eventsTd.appendChild(el("span", { class: "badge badge-graded", text: "نظيف" }));
+    else {
+      const badgeClass = warningsCount >= 3 ? "badge-paused" : warningsCount > 0 ? "badge-in_progress" : "badge-draft";
+      eventsTd.appendChild(el("span", { class: `badge ${badgeClass}`, text: `${eventsCount} حدث` }));
     }
     tr.appendChild(eventsTd);
 
     const detailsTd = el("td");
-    const detailsBtn = el("button", {
-      type: "button",
-      class: "btn btn-ghost btn-xs",
-      title: "عرض تفاصيل الجلسة"
-    });
+    const detailsBtn = el("button", { type: "button", class: "btn btn-ghost btn-xs", title: "عرض تفاصيل الجلسة" });
     detailsBtn.appendChild(svgIcon("eye", 14));
     detailsBtn.appendChild(document.createTextNode(" تفاصيل"));
-    detailsBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openAttemptDetails(a, exam);
-    });
+    detailsBtn.addEventListener("click", (e) => { e.stopPropagation(); openAttemptDetails(a, exam); });
     detailsTd.appendChild(detailsBtn);
     tr.appendChild(detailsTd);
 
@@ -2969,6 +3041,7 @@ function renderQuestionsTab(host, exam) {
         el("span", { class: "fw-semibold", text: `س${i + 1} · ${qTypeLabel(q.type)}` }),
         el("span", { class: "badge badge-draft", text: `${q.score} نقطة` })
       ]));
+      if (q.header) row.appendChild(el("div", { class: "text-sm text-muted mb-2", text: q.header }));
       row.appendChild(el("p", { text: q.text || "—" }));
       block.appendChild(row);
     });
@@ -2990,7 +3063,6 @@ function renderGradingList(host, exam, attempts) {
     info.appendChild(el("div", { class: "fw-semibold", text: a.studentName }));
     info.appendChild(el("div", { class: "text-sm text-muted", text: fmtDate(a.submittedAt) }));
     row.appendChild(info);
-
     const btn = el("button", { class: "btn btn-primary btn-sm", type: "button", text: "تصحيح" });
     btn.addEventListener("click", () => navigate(`/app/grading?exam=${exam.id}&attempt=${a.id}`));
     row.appendChild(btn);
@@ -3000,7 +3072,394 @@ function renderGradingList(host, exam, attempts) {
 }
 
 /* ============================================================
-   ATTEMPT DETAILS — Timeline + Anti-cheat
+   AUTO-GRADE (MCQ / TF / Complete)
+   ============================================================ */
+async function autoGradeAttempts(examId, exam) {
+  const answersMap = await getExamAnswers(examId);
+  if (!Object.keys(answersMap).length) {
+    return { graded: 0, pendingManual: 0, total: 0, noAnswerKey: true };
+  }
+
+  const attempts = await listAttempts(examId);
+  const ungraded = attempts.filter((a) => !a.gradedAt && a.status === "submitted");
+  if (!ungraded.length) {
+    return { graded: 0, pendingManual: 0, total: attempts.length, alreadyDone: true };
+  }
+
+  const allQuestions = getAllExamQuestions(exam);
+  const totalPossible = allQuestions.reduce((s, q) => s + (Number(q.score) || 0), 0);
+
+  let gradedCount = 0;
+  let pendingManual = 0;
+
+  for (const attempt of ungraded) {
+    const answers = attempt.answers || {};
+    let autoScore = 0;
+    const perQ = {};
+    let hasManual = false;
+    const manualQuestions = [];
+
+    allQuestions.forEach((q) => {
+      const a = answers[q.id] || {};
+      const key = answersMap[q.id] || {};
+      let sc = 0;
+
+      const hasKey = key && (
+        (q.type === "mcq" || q.type === "mcq_just") ? key.correctIndex != null :
+        (q.type === "tf" || q.type === "tf_just") ? key.correctBool != null :
+        (q.type === "complete") ? !!key.correctText :
+        (q.type === "essay") ? !!key.modelAnswer :
+        false
+      );
+
+      if (!hasKey) {
+        hasManual = true;
+        manualQuestions.push(q.id);
+        perQ[q.id] = null;
+        return;
+      }
+
+      if (q.type === "mcq") {
+        if (a.selectedIndex != null && a.selectedIndex === key.correctIndex) sc = Number(q.score) || 0;
+      } else if (q.type === "tf") {
+        if (a.boolValue != null && a.boolValue === key.correctBool) sc = Number(q.score) || 0;
+      } else if (q.type === "complete") {
+        const norm = (v) => String(v || "").trim().toLowerCase();
+        if (norm(a.textValue) === norm(key.correctText)) sc = Number(q.score) || 0;
+      } else {
+        hasManual = true;
+        manualQuestions.push(q.id);
+        perQ[q.id] = null;
+        return;
+      }
+
+      perQ[q.id] = sc;
+      autoScore += sc;
+    });
+
+    try {
+      const updateData = {
+        autoScore,
+        perQuestionScores: perQ,
+        totalPossible,
+        autoGradedAt: serverTimestamp()
+      };
+
+      if (!hasManual) {
+        updateData.score = autoScore;
+        updateData.percentage = totalPossible ? Math.round((autoScore / totalPossible) * 100) : 0;
+        updateData.gradedAt = serverTimestamp();
+        updateData.gradedBy = currentProfile.uid;
+        updateData.status = "graded";
+        gradedCount++;
+      } else {
+        updateData.hasPendingManual = true;
+        updateData.pendingManualQuestions = manualQuestions;
+        pendingManual++;
+      }
+
+      await updateDoc(doc(db, "attempts", attempt.id), updateData);
+    } catch (err) { console.warn("auto-grade failed", attempt.id, err); }
+  }
+
+  return { graded: gradedCount, pendingManual, total: ungraded.length };
+}
+
+function getAllExamQuestions(exam) {
+  if (exam.forms && exam.forms.length) return exam.forms.flatMap((f) => f.questions || []);
+  return exam.questions || [];
+}
+
+/* ============================================================
+   AI QEYAS — BATCH GRADING FLOW (with queue + countdown)
+   ============================================================ */
+async function runAIGradeAll(exam, attempts) {
+  const allQuestions = getAllExamQuestions(exam);
+  const essayQuestions = allQuestions.filter(isEssay);
+  if (!essayQuestions.length) {
+    toast("مفيش أسئلة مقالية في الامتحان ده", "info");
+    return;
+  }
+
+  const submittedAttempts = attempts.filter(
+    (a) => (a.status === "submitted" || a.status === "graded") && !a.gradedAt
+  );
+
+  if (!submittedAttempts.length) {
+    toast("مفيش أوراق بانتظار التصحيح", "info");
+    return;
+  }
+
+  const totalEssays = essayQuestions.length * submittedAttempts.length;
+
+  // الحد الأقصى حسب التوكنز
+  if (totalEssays > AI_CONSTANTS.MAX_ESSAYS_PER_REQUEST) {
+    openModal({
+      title: "العدد كبير أوي",
+      body: el("div", { class: "stack-sm" }, [
+        el("p", { class: "text-secondary" }, [
+          document.createTextNode(`الامتحان فيه ${totalEssays} إجابة مقالية، والحد الأقصى للطلب الواحد ${AI_CONSTANTS.MAX_ESSAYS_PER_REQUEST} إجابة.`)
+        ]),
+        el("p", { class: "text-sm text-muted", text: "قلل عدد الطلاب في الطلب الواحد، أو استخدم تصحيح تلقائي للموضوعي أولاً." })
+      ]),
+      actions: [{ label: "تمام", class: "btn-primary" }]
+    });
+    return;
+  }
+
+  const cost = computeAICost(essayQuestions.length, submittedAttempts.length);
+  const currentBalance = currentCredits?.balance ?? 0;
+  const afterBalance = currentBalance - cost;
+
+  // نافذة التأكيد
+  const body = el("div", { class: "stack" });
+  body.appendChild(el("p", { class: "text-secondary" }, [
+    document.createTextNode("AI Qeyas هيصحح ")
+  , el("strong", { text: String(submittedAttempts.length) }),
+    document.createTextNode(" ورقة، فيها ")
+  , el("strong", { text: String(essayQuestions.length) }),
+    document.createTextNode(" سؤال مقالي.")
+  ]));
+
+  const costBox = el("div", { class: "ai-confirm-cost" });
+  costBox.appendChild(el("span", { class: "ai-confirm-cost-label", text: "التكلفة المتوقعة" }));
+  const costVal = el("span", { class: "ai-confirm-cost-value" });
+  costVal.appendChild(creditCoinSVG(28, "coinInModal"));
+  costVal.appendChild(document.createTextNode(" " + cost));
+  costBox.appendChild(costVal);
+  body.appendChild(costBox);
+
+  const breakdown = el("div", { class: "ai-confirm-breakdown" });
+  [
+    ["إجمالي الإجابات المقالية", String(totalEssays)],
+    ["رصيدك الحالي", String(currentBalance)],
+    ["الرصيد بعد العملية", String(afterBalance)]
+  ].forEach(([k, v]) => {
+    breakdown.appendChild(el("div", { class: "row-between" }, [
+      el("span", { text: k }), el("span", { text: v })
+    ]));
+  });
+  body.appendChild(breakdown);
+
+  if (currentBalance < cost) {
+    const errBox = el("div", {
+      style: "padding:12px 14px;background:var(--danger-50);color:var(--danger-600);border:1px solid var(--danger-500);border-radius:var(--r-sm);font-size:var(--fs-sm)"
+    }, [
+      el("strong", { text: "رصيدك غير كافٍ. " }),
+      document.createTextNode("محتاج "),
+      el("strong", { text: String(cost) }),
+      document.createTextNode(" كريدت. اشتر باقة أولاً.")
+    ]);
+    body.appendChild(errBox);
+  } else {
+    body.appendChild(el("p", { class: "text-sm text-muted" },
+      [document.createTextNode("AI هيقترح درجات لكل إجابة. إنت تراجعها قبل الاعتماد.")]));
+  }
+
+  const actions = [{ label: "إلغاء", class: "btn-ghost" }];
+  if (currentBalance >= cost) {
+    actions.push({
+      label: "موافق، ابدأ التصحيح",
+      class: "btn-gold",
+      onClick: async () => {
+        await actuallyRunAIGradeAll(exam, submittedAttempts, essayQuestions, cost);
+        return true;
+      }
+    });
+  } else {
+    actions.push({
+      label: "اشتر باقة",
+      class: "btn-primary",
+      onClick: () => { navigate("/app/subscription"); return true; }
+    });
+  }
+
+  openModal({ title: "تصحيح الكل بـ AI Qeyas", body, className: "ai-confirm-modal", actions });
+}
+
+async function actuallyRunAIGradeAll(exam, attempts, essayQuestions, cost) {
+  // 1) استنى دور في الطابور
+  const queueModal = openModal({
+    title: "في انتظار دورك…",
+    body: buildQueueModalBody(1, 20),
+    className: "ai-confirm-modal",
+    actions: []
+  });
+
+  const positionData = { position: 1, waitSec: 20 };
+  const tickTimer = setInterval(() => {
+    if (positionData.waitSec > 0) positionData.waitSec--;
+    const container = queueModal.box.querySelector("[data-queue-body]");
+    if (container) {
+      container.innerHTML = "";
+      container.appendChild(buildQueueModalContent(positionData.position, positionData.waitSec));
+    }
+  }, 1000);
+
+  let claimed = false;
+  try {
+    claimed = await waitForAISlot(({ position, waitSec }) => {
+      positionData.position = position;
+      positionData.waitSec = waitSec;
+    });
+
+    if (!claimed) {
+      clearInterval(tickTimer);
+      queueModal.close();
+      toast("الخدمة مشغولة حاليًا، حاول بعد شوية", "warning", 6000);
+      return;
+    }
+
+    // 2) احجز مكان في الطابور الفعلي
+    const slotClaimed = await claimAISlot();
+    if (!slotClaimed) {
+      clearInterval(tickTimer);
+      queueModal.close();
+      toast("الخدمة مشغولة حاليًا، حاول بعد شوية", "warning", 6000);
+      return;
+    }
+
+    clearInterval(tickTimer);
+    queueModal.close();
+    showGlobalLoading("AI Qeyas بيصحح…");
+
+    // 3) ابعت الطلب
+    const submissions = attempts.map((att) => ({
+      attemptId: att.id,
+      studentName: att.studentName,
+      answers: essayQuestions.map((q) => {
+        const a = (att.answers || {})[q.id] || {};
+        return {
+          questionId: q.id,
+          type: q.type,
+          text: a.essayText || a.justification || "",
+          selectedIndex: a.selectedIndex ?? null,
+          boolValue: a.boolValue ?? null
+        };
+      })
+    }));
+
+    const questionsPayload = essayQuestions.map((q) => ({
+      id: q.id,
+      type: q.type,
+      header: q.header || "",
+      text: q.text,
+      score: Number(q.score) || 0,
+      modelAnswer: q.modelAnswer || "",
+      justificationModelAnswer: q.justificationModelAnswer || "",
+      correctIndex: q.correctIndex ?? null,
+      correctBool: q.correctBool ?? null,
+      options: q.options || []
+    }));
+
+    const result = await aiGradeBatch({
+      examId: exam.id,
+      examTitle: exam.title || "",
+      questions: questionsPayload,
+      submissions,
+      estimatedCost: cost
+    });
+
+    // 4) احفظ النتائج
+    const scores = result.scores || [];
+    for (const item of scores) {
+      const attemptRef = doc(db, "attempts", item.attemptId);
+      const perQScores = {};
+      (item.questionScores || []).forEach((qs) => {
+        perQScores[qs.questionId] = Number(qs.score) || 0;
+      });
+
+      const attemptSnap = await getDoc(attemptRef);
+      if (!attemptSnap.exists()) continue;
+
+      const existing = attemptSnap.data();
+      const manualScores = { ...(existing.manualScores || {}), ...perQScores };
+      const autoScore = existing.autoScore || 0;
+
+      // احسب الإجمالي من اليدوي
+      let manualTotal = 0;
+      Object.values(manualScores).forEach((v) => { manualTotal += Number(v) || 0; });
+
+      const totalScore = autoScore + manualTotal;
+      const totalPossible = existing.totalPossible || exam.totalScore || 0;
+
+      await updateDoc(attemptRef, {
+        manualScores,
+        score: totalScore,
+        percentage: totalPossible ? Math.round((totalScore / totalPossible) * 100) : 0,
+        gradedAt: serverTimestamp(),
+        gradedBy: currentProfile.uid,
+        gradedByAI: true,
+        aiGradedAt: serverTimestamp(),
+        status: "graded"
+      });
+    }
+
+    hideGlobalLoading();
+    toast(`تم تصحيح ${scores.length} ورقة بـ AI Qeyas`, "success", 5000);
+    renderExamDetails(currentParams);
+  } catch (err) {
+    hideGlobalLoading();
+    clearInterval(tickTimer);
+    try { queueModal.close(); } catch {}
+    console.error("[ai-grade-all]", err);
+
+    const codeMap = {
+      INSUFFICIENT_CREDITS: "رصيدك غير كافٍ — اشتر باقة أولاً",
+      AI_SERVICE_ERROR: "الخدمة مش متاحة دلوقتي — حاول بعد شوية",
+      AI_QUOTA_EXCEEDED: "تم استهلاك الحد اليومي — حاول بكرة",
+      AI_EMPTY_RESPONSE: "لم يتم استلام رد من الخدمة — حاول مرة أخرى",
+      AI_BAD_FORMAT: "استجابة غير صالحة — حاول مرة أخرى",
+      AI_NO_SCORES: "لم يتم استخراج درجات — حاول مرة أخرى",
+      INVALID_INPUT: "بيانات الطلب غير صحيحة",
+      UNAUTHORIZED: "انتهت جلستك — أعد تسجيل الدخول",
+      NOT_AUTHED: "انتهت جلستك — أعد تسجيل الدخول",
+      AI_FAILED: "فشل التصحيح التلقائي — حاول مرة أخرى",
+      TOO_MANY_ESSAYS: "عدد الإجابات المقالية كبير جدًا"
+    };
+    toast(codeMap[err.code] || codeMap.AI_FAILED, "error", 7000);
+  } finally {
+    if (claimed) {
+      try { await releaseAISlot(); } catch {}
+    }
+  }
+}
+
+function buildQueueModalBody(position, waitSec) {
+  const body = el("div", { class: "stack" });
+  const container = el("div", { "data-queue-body": "1" });
+  container.appendChild(buildQueueModalContent(position, waitSec));
+  body.appendChild(container);
+  return body;
+}
+
+function buildQueueModalContent(position, waitSec) {
+  const wrap = el("div", { class: "stack-sm" });
+
+  const msg = el("p", { class: "text-secondary" });
+  if (position <= 1) {
+    msg.textContent = "الخدمة مشغولة — جارٍ تجهيز دورك…";
+  } else {
+    msg.textContent = `في انتظار دورك… ترتيبك الحالي: ${position}`;
+  }
+  wrap.appendChild(msg);
+
+  const countdownBox = el("div", { class: "ai-confirm-cost" });
+  countdownBox.appendChild(el("span", { class: "ai-confirm-cost-label", text: "متبقي تقريبًا" }));
+  const secEl = el("span", { class: "ai-confirm-cost-value" });
+  secEl.appendChild(document.createTextNode(String(waitSec) + " ث"));
+  countdownBox.appendChild(secEl);
+  wrap.appendChild(countdownBox);
+
+  wrap.appendChild(el("p", { class: "text-xs text-muted",
+    text: "الخدمة بتشتغل بعدد محدود في نفس الوقت لضمان الجودة. اقفل الرسالة لو مش عايز تستنى."
+  }));
+
+  return wrap;
+}
+
+/* ============================================================
+   ATTEMPT DETAILS
    ============================================================ */
 const EVENT_LABELS = {
   tab_hidden:       { label: "خرج من الصفحة",          color: "warning" },
@@ -3020,13 +3479,13 @@ const EVENT_LABELS = {
   shortcut_s:       { label: "اختصار حفظ الصفحة",       color: "warning" },
   shortcut_p:       { label: "اختصار طباعة",           color: "warning" },
   shortcut_u:       { label: "اختصار عرض المصدر",       color: "warning" },
+  printscreen_blocked: { label: "محاولة PrintScreen",    color: "danger"  },
   offline:          { label: "انقطع الاتصال",          color: "warning" },
   online:           { label: "عاد الاتصال",           color: "success" },
 };
 
 function openAttemptDetails(attempt, exam) {
   const events = (attempt.anticheatEvents || []).slice().sort((a, b) => (a.at || 0) - (b.at || 0));
-
   const count = (type) => events.filter((e) => e.type === type).length;
   const stats = {
     tabSwitches: count("tab_hidden"),
@@ -3038,14 +3497,14 @@ function openAttemptDetails(attempt, exam) {
     devtools: count("devtools_attempt") + count("devtools_open"),
     shortcuts: events.filter((e) => (e.type || "").startsWith("shortcut_")).length,
     offline: count("offline"),
+    printScreens: count("printscreen_blocked")
   };
 
   const totalSuspicious =
     stats.tabSwitches + stats.windowBlurs + stats.copyAttempts +
-    stats.pasteAttempts + stats.fsExits + stats.devtools + stats.shortcuts;
+    stats.pasteAttempts + stats.fsExits + stats.devtools + stats.shortcuts + stats.printScreens;
 
   const body = el("div", { class: "stack" });
-
   const info = el("div", { class: "card", style: "background:var(--bg-subtle)" });
   const totalPossible = exam.totalScore || 0;
   [
@@ -3053,37 +3512,27 @@ function openAttemptDetails(attempt, exam) {
     ["الحالة", statusLabel(attempt.status || "draft")],
     ["البدء", fmtDate(attempt.startedAt)],
     ["التسليم", attempt.submittedAt ? fmtDate(attempt.submittedAt) : "—"],
-    ["الدرجة", attempt.score != null ? `${attempt.score} / ${totalPossible}` : "—"],
+    ["الدرجة", attempt.score != null ? `${attempt.score} / ${totalPossible}` : "—"]
   ].forEach(([k, v]) => {
     info.appendChild(el("div", { class: "row-between", style: "padding:6px 0" }, [
       el("span", { class: "text-sm text-muted", text: k }),
-      el("span", { class: "text-sm fw-semibold", text: v }),
+      el("span", { class: "text-sm fw-semibold", text: v })
     ]));
   });
   body.appendChild(info);
 
   let verdictText = "لم يتم رصد أي نشاط مريب.";
   let verdictClass = "is-success";
-  if (totalSuspicious >= 10) {
-    verdictText = "نشاط مريب كثيف — يُنصح بمراجعة الإجابات يدويًا.";
-    verdictClass = "is-danger";
-  } else if (totalSuspicious >= 4) {
-    verdictText = "نشاط مريب ملحوظ — راجع التفاصيل.";
-    verdictClass = "is-warning";
-  } else if (totalSuspicious > 0) {
-    verdictText = "نشاط بسيط تم رصده.";
-    verdictClass = "is-info";
-  }
+  if (totalSuspicious >= 10) { verdictText = "نشاط مريب كثيف — يُنصح بمراجعة الإجابات يدويًا."; verdictClass = "is-danger"; }
+  else if (totalSuspicious >= 4) { verdictText = "نشاط مريب ملحوظ — راجع التفاصيل."; verdictClass = "is-warning"; }
+  else if (totalSuspicious > 0) { verdictText = "نشاط بسيط تم رصده."; verdictClass = "is-info"; }
 
-  const verdict = el("div", {
-    class: `quick-report-item ${verdictClass}`,
-    style: "padding:var(--sp-4);border-radius:var(--r-md)"
-  });
+  const verdict = el("div", { class: `quick-report-item ${verdictClass}`, style: "padding:var(--sp-4);border-radius:var(--r-md)" });
   verdict.appendChild(el("div", { class: "fw-semibold", text: verdictText }));
   body.appendChild(verdict);
 
   const statsGrid = el("div", { class: "quick-report" });
-  const statItems = [
+  [
     ["تبديل تاب", stats.tabSwitches, "is-warning"],
     ["خروج من النافذة", stats.windowBlurs, "is-warning"],
     ["نسخ / قص", stats.copyAttempts, "is-danger"],
@@ -3091,9 +3540,9 @@ function openAttemptDetails(attempt, exam) {
     ["خروج من ملء الشاشة", stats.fsExits, "is-danger"],
     ["DevTools", stats.devtools, "is-danger"],
     ["اختصارات", stats.shortcuts, "is-warning"],
-    ["انقطاع نت", stats.offline, "is-info"],
-  ];
-  statItems.forEach(([label, value, cls]) => {
+    ["PrintScreen", stats.printScreens, "is-danger"],
+    ["انقطاع نت", stats.offline, "is-info"]
+  ].forEach(([label, value, cls]) => {
     const item = el("div", { class: `quick-report-item ${value > 0 ? cls : ""}` });
     item.appendChild(el("span", { class: "quick-report-label", text: label }));
     item.appendChild(el("span", { class: "quick-report-value", text: String(value) }));
@@ -3115,28 +3564,19 @@ function openAttemptDetails(attempt, exam) {
     ]));
   } else {
     const timeline = el("div", { class: "attempt-timeline" });
-
     events.forEach((evt) => {
       const meta = EVENT_LABELS[evt.type] || { label: evt.type, color: "info" };
       const row = el("div", { class: `attempt-timeline-row is-${meta.color}` });
-
       const left = el("div", { style: "display:flex;align-items:center;gap:10px;min-width:0" });
       const text = el("div", { style: "min-width:0" });
       text.appendChild(el("div", { class: "text-sm fw-semibold", text: meta.label }));
-      if (evt.count != null) {
-        text.appendChild(el("div", { class: "text-xs text-muted", text: `المرة ${evt.count}` }));
-      }
+      if (evt.count != null) text.appendChild(el("div", { class: "text-xs text-muted", text: `المرة ${evt.count}` }));
       left.appendChild(text);
       row.appendChild(left);
-
-      const time = new Date(evt.at || 0).toLocaleTimeString("ar-EG", {
-        hour: "2-digit", minute: "2-digit", second: "2-digit"
-      });
+      const time = new Date(evt.at || 0).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
       row.appendChild(el("span", { class: "attempt-timeline-time", text: time }));
-
       timeline.appendChild(row);
     });
-
     body.appendChild(timeline);
   }
 
@@ -3146,82 +3586,9 @@ function openAttemptDetails(attempt, exam) {
     className: "attempt-details-modal",
     actions: [
       { label: "إغلاق", class: "btn-ghost" },
-      {
-        label: "تصحيح الورقة",
-        class: "btn-primary",
-        onClick: () => navigate(`/app/grading?exam=${exam.id}&attempt=${attempt.id}`)
-      }
+      { label: "تصحيح الورقة", class: "btn-primary", onClick: () => navigate(`/app/grading?exam=${exam.id}&attempt=${attempt.id}`) }
     ]
   });
-}
-
-/* ============================================================
-   AUTO-GRADE
-   ============================================================ */
-async function autoGradeAttempts(examId, exam) {
-  const answersMap = await getExamAnswers(examId);
-  if (!Object.keys(answersMap).length) return 0;
-
-  const attempts = await listAttempts(examId);
-  const ungraded = attempts.filter((a) => !a.gradedAt && a.status === "submitted");
-  if (!ungraded.length) return 0;
-
-  const allQuestions = getAllExamQuestions(exam);
-  const totalPossible = allQuestions.reduce((s, q) => s + (Number(q.score) || 0), 0);
-
-  let count = 0;
-  for (const attempt of ungraded) {
-    const answers = attempt.answers || {};
-    let autoScore = 0;
-    const perQ = {};
-
-    allQuestions.forEach((q) => {
-      const a = answers[q.id] || {};
-      const key = answersMap[q.id] || {};
-      let sc = 0;
-
-      if (q.type === "mcq") {
-        if (a.selectedIndex != null && a.selectedIndex === key.correctIndex) sc = Number(q.score) || 0;
-      } else if (q.type === "tf") {
-        if (a.boolValue != null && a.boolValue === key.correctBool) sc = Number(q.score) || 0;
-      } else if (q.type === "complete") {
-        const norm = (v) => String(v || "").trim().toLowerCase();
-        if (norm(a.textValue) === norm(key.correctText)) sc = Number(q.score) || 0;
-      }
-      perQ[q.id] = sc;
-      autoScore += sc;
-    });
-
-    const hasManual = allQuestions.some((q) => ["essay", "mcq_just", "tf_just"].includes(q.type));
-    const percentage = totalPossible ? Math.round((autoScore / totalPossible) * 100) : 0;
-
-    try {
-      const updateData = {
-        autoScore,
-        perQuestionScores: perQ,
-        totalPossible
-      };
-      if (!hasManual) {
-        updateData.score = autoScore;
-        updateData.percentage = percentage;
-        updateData.gradedAt = serverTimestamp();
-        updateData.gradedBy = currentProfile.uid;
-        updateData.status = "graded";
-      }
-      await updateDoc(doc(db, "attempts", attempt.id), updateData);
-      count++;
-    } catch (err) {
-      console.warn("auto-grade failed", attempt.id, err);
-    }
-  }
-  return count;
-}
-
-function getAllExamQuestions(exam) {
-  if (exam.forms && exam.forms.length) {
-    return exam.forms.flatMap((f) => f.questions || []);
-  }
-  return exam.questions || [];
 }
 
 /* ============================================================
@@ -3229,7 +3596,6 @@ function getAllExamQuestions(exam) {
    ============================================================ */
 function buildLeaderboardRanking(attempts) {
   const valid = attempts.filter((a) => (a.status === "submitted" || a.status === "graded") && a.gradedAt);
-
   const sorted = valid.slice().sort((a, b) => {
     const sa = Number(a.score || 0);
     const sb = Number(b.score || 0);
@@ -3245,13 +3611,10 @@ function buildLeaderboardRanking(attempts) {
   sorted.forEach((a, i) => {
     const score = Number(a.score || 0);
     if (score !== lastScore) {
-      rank = i + 1;
-      lastScore = score;
-      a._rank = rank;
-      a._isDuplicate = false;
+      rank = i + 1; lastScore = score;
+      a._rank = rank; a._isDuplicate = false;
     } else {
-      a._rank = rank;
-      a._isDuplicate = true;
+      a._rank = rank; a._isDuplicate = true;
     }
   });
 
@@ -3261,9 +3624,7 @@ function buildLeaderboardRanking(attempts) {
 function buildLeaderboard(exam, attempts) {
   const ranked = buildLeaderboardRanking(attempts);
   const totalPossible = exam.totalScore || 0;
-
   const wrapper = el("div", { class: "card", style: "margin-bottom:var(--sp-5)" });
-
   const header = el("h3", {
     class: "builder-panel-title",
     style: "margin-bottom:var(--sp-4);display:flex;align-items:center;gap:8px"
@@ -3300,12 +3661,10 @@ function buildLeaderboard(exam, attempts) {
     ranked.slice(3).forEach((a) => {
       const row = el("div", { class: "leaderboard-row" });
       row.appendChild(el("div", { class: "lb-rank", text: String(a._rank) }));
-
       const nameWrap = el("div", { class: "lb-name" });
       nameWrap.appendChild(document.createTextNode(a.studentName || "—"));
       if (a._isDuplicate) nameWrap.appendChild(el("span", { class: "lb-dup-badge", text: "مكرر" }));
       row.appendChild(nameWrap);
-
       row.appendChild(el("div", { class: "lb-score", text: `${a.score || 0}` }));
       row.appendChild(el("div", { class: "lb-time", text: fmtDate(a.submittedAt) }));
       list.appendChild(row);
@@ -3319,7 +3678,6 @@ function buildLeaderboard(exam, attempts) {
 function renderLeaderboardPage(exam, attempts) {
   const page = $('[data-page="exam"]');
   if (!page) return;
-
   $("[data-exam-loading]").hidden = true;
   $("[data-exam-error]").hidden = true;
 
@@ -3339,18 +3697,14 @@ function renderLeaderboardPage(exam, attempts) {
   }));
   inner.appendChild(header);
 
-  const lb = buildLeaderboard(exam, attempts);
-  inner.appendChild(lb);
+  inner.appendChild(buildLeaderboard(exam, attempts));
 
   const cta = el("div", { style: "margin-top:var(--sp-5);text-align:center" });
   cta.appendChild(el("button", {
-    type: "button",
-    class: "btn btn-primary btn-lg",
-    text: "تحديث",
+    type: "button", class: "btn btn-primary btn-lg", text: "تحديث",
     onclick: () => location.reload()
   }));
   inner.appendChild(cta);
-
   container.appendChild(inner);
   page.appendChild(container);
 }
@@ -3360,7 +3714,6 @@ function renderLeaderboardPage(exam, attempts) {
    ============================================================ */
 function shareExam(exam) {
   const url = `${location.origin}${location.pathname}#/exam?id=${exam.id}`;
-
   const body = el("div", { class: "stack" });
 
   const linkField = el("div", { class: "field" });
@@ -3371,10 +3724,7 @@ function shareExam(exam) {
   linkRow.appendChild(linkInput);
 
   const copyBtn = el("button", { class: "btn btn-outline btn-sm", type: "button", text: "نسخ" });
-  copyBtn.addEventListener("click", () => {
-    navigator.clipboard.writeText(url);
-    toast("تم النسخ", "success");
-  });
+  copyBtn.addEventListener("click", () => { navigator.clipboard.writeText(url); toast("تم النسخ", "success"); });
   linkRow.appendChild(copyBtn);
   linkField.appendChild(linkRow);
   body.appendChild(linkField);
@@ -3386,9 +3736,7 @@ function shareExam(exam) {
   body.appendChild(qrSection);
 
   openModal({
-    title: "شارك الامتحان",
-    body,
-    className: "share-exam-modal",
+    title: "شارك الامتحان", body, className: "share-exam-modal",
     actions: [
       { label: "تحميل QR", class: "btn-outline", keepOpen: true, onClick: () => downloadQR(exam.title || "امتحان") },
       { label: "إغلاق", class: "btn-primary" }
@@ -3400,11 +3748,8 @@ function shareExam(exam) {
     if (!container || typeof QRCode === "undefined") return;
     container.innerHTML = "";
     new QRCode(container, {
-      text: url,
-      width: 220,
-      height: 220,
-      colorDark: "#0f172a",
-      colorLight: "#ffffff",
+      text: url, width: 220, height: 220,
+      colorDark: "#0f172a", colorLight: "#ffffff",
       correctLevel: QRCode.CorrectLevel.H
     });
   }, 50);
@@ -3431,7 +3776,7 @@ function downloadQR(examTitle) {
 }
 
 /* ============================================================
-   GRADING
+   GRADING (single attempt)
    ============================================================ */
 async function renderGrading(params) {
   const examId = params?.get("exam");
@@ -3480,16 +3825,16 @@ async function renderGrading(params) {
 
   allQuestions.forEach((q, i) => {
     const a = answers[q.id] || {};
-    const isManual = ["essay", "mcq_just", "tf_just"].includes(q.type);
+    const isManual = isEssay(q);
     const key = answersMap[q.id] || {};
 
     const card = el("div", { class: "grading-card" });
+    if (q.header) card.appendChild(el("div", { class: "q-header-text", text: q.header }));
     card.appendChild(el("div", { class: "grading-question", text: `س${i + 1} · ${q.text}` }));
 
     const ansBlock = el("div", { class: "grading-answer-block" });
     ansBlock.appendChild(el("div", { class: "answer-label" }, [
-      svgIcon("user", 14),
-      document.createTextNode("إجابة الطالب")
+      svgIcon("user", 14), document.createTextNode("إجابة الطالب")
     ]));
 
     const isUnanswered = !isAnswered(a, q);
@@ -3518,8 +3863,7 @@ async function renderGrading(params) {
 
       if (q.type === "mcq_just" || q.type === "tf_just") {
         ansBlock.appendChild(el("div", { class: "answer-label mt-3" }, [
-          svgIcon("edit", 14),
-          document.createTextNode("التبرير")
+          svgIcon("edit", 14), document.createTextNode("التبرير")
         ]));
         if (a.justification && a.justification.trim()) {
           const jBlock = el("div", { class: "essay-answer-block" });
@@ -3540,8 +3884,7 @@ async function renderGrading(params) {
     if (q.type !== "essay") {
       const corBlock = el("div", { class: "grading-answer-block" });
       corBlock.appendChild(el("div", { class: "answer-label" }, [
-        svgIcon("check", 14),
-        document.createTextNode("الإجابة الصحيحة")
+        svgIcon("check", 14), document.createTextNode("الإجابة الصحيحة")
       ]));
       let correctText = "—";
       if (q.type === "mcq" || q.type === "mcq_just") correctText = q.options?.[key.correctIndex] || "—";
@@ -3553,8 +3896,7 @@ async function renderGrading(params) {
 
     if (q.type === "essay" && key.modelAnswer) {
       card.appendChild(el("div", { class: "answer-label" }, [
-        svgIcon("book", 14),
-        document.createTextNode("الإجابة النموذجية")
+        svgIcon("book", 14), document.createTextNode("الإجابة النموذجية")
       ]));
       const modelBlock = el("div", { class: "model-answer-block" });
       modelBlock.textContent = key.modelAnswer;
@@ -3563,12 +3905,21 @@ async function renderGrading(params) {
 
     if ((q.type === "mcq_just" || q.type === "tf_just") && key.justificationModelAnswer) {
       card.appendChild(el("div", { class: "answer-label" }, [
-        svgIcon("book", 14),
-        document.createTextNode("التبرير النموذجي")
+        svgIcon("book", 14), document.createTextNode("التبرير النموذجي")
       ]));
       const jBlock = el("div", { class: "model-answer-block" });
       jBlock.textContent = key.justificationModelAnswer;
       card.appendChild(jBlock);
+    }
+
+    if (isManual && manualScores[q.id] != null && attempt.gradedByAI) {
+      const aiBox = el("div", { class: "ai-suggestion-box" });
+      aiBox.appendChild(el("div", { class: "ai-suggestion-label" }, [
+        svgIcon("sparkles", 14),
+        document.createTextNode("اقتراح AI Qeyas")
+      ]));
+      aiBox.appendChild(el("div", { class: "ai-suggestion-value", text: `${manualScores[q.id]} / ${q.score || 1}` }));
+      card.appendChild(aiBox);
     }
 
     const scoreRow = el("div", { class: "grading-score-row" });
@@ -3585,35 +3936,24 @@ async function renderGrading(params) {
 
     scoreRow.appendChild(el("span", { class: "text-sm fw-semibold", text: "الدرجة:" }));
     const num = el("input", {
-      type: "number",
-      class: "input",
-      min: "0",
-      max: String(q.score || 1),
-      step: "0.5",
+      type: "number", class: "input",
+      min: "0", max: String(q.score || 1), step: "0.5",
       style: "max-width:100px"
     });
 
     const existingManual = manualScores[q.id];
-    if (existingManual != null) {
-      num.value = existingManual;
-    } else if (isManual) {
-      num.value = 0;
-    } else {
-      num.value = Number(perQ[q.id] || 0);
-    }
+    if (existingManual != null) num.value = existingManual;
+    else if (isManual) num.value = 0;
+    else num.value = Number(perQ[q.id] || 0);
 
-    num.addEventListener("input", () => {
-      manualScores[q.id] = Number(num.value) || 0;
-    });
+    num.addEventListener("input", () => { manualScores[q.id] = Number(num.value) || 0; });
 
     scoreRow.appendChild(num);
     scoreRow.appendChild(el("span", { class: "text-sm text-muted", text: `/ ${q.score || 1}` }));
 
     if (!isManual) {
       const resetBtn = el("button", {
-        class: "btn btn-ghost btn-xs",
-        type: "button",
-        text: "تلقائي",
+        class: "btn btn-ghost btn-xs", type: "button", text: "تلقائي",
         onclick: () => {
           delete manualScores[q.id];
           num.value = Number(perQ[q.id] || 0);
@@ -3645,11 +3985,8 @@ async function renderGrading(params) {
   function computeFinalScore() {
     let total = 0;
     allQuestions.forEach((q) => {
-      if (manualScores[q.id] != null) {
-        total += Number(manualScores[q.id]) || 0;
-      } else {
-        total += Number(perQ[q.id] || 0);
-      }
+      if (manualScores[q.id] != null) total += Number(manualScores[q.id]) || 0;
+      else total += Number(perQ[q.id] || 0);
     });
     return total;
   }
@@ -3657,8 +3994,7 @@ async function renderGrading(params) {
   async function saveGrading() {
     const finalScore = computeFinalScore();
     await updateDoc(doc(db, "attempts", attemptId), {
-      manualScores,
-      feedback,
+      manualScores, feedback,
       examFeedback: fbTa.value,
       score: finalScore,
       percentage: totalPossible ? Math.round((finalScore / totalPossible) * 100) : 0,
@@ -3682,10 +4018,7 @@ async function renderGrading(params) {
       toast("تم حفظ التصحيح", "success");
     } catch (err) {
       console.error(err);
-      const reason = err?.code === "permission-denied"
-        ? "ليس لديك صلاحية التعديل"
-        : err?.message || "خطأ في الشبكة";
-      toast(`فشل حفظ التصحيح: ${reason}`, "error", 6000);
+      toast("فشل حفظ التصحيح: " + (err?.code === "permission-denied" ? "ليس لديك صلاحية" : "خطأ"), "error", 6000);
     }
   });
   actRow.appendChild(saveBtn);
@@ -3714,13 +4047,14 @@ async function renderGrading(params) {
 }
 
 /* ============================================================
-   PROFILE / SETTINGS / SUPPORT
+   PROFILE
    ============================================================ */
 function renderProfile() {
   if (!currentProfile) return;
   $$("[data-profile-avatar]").forEach((e) => (e.src = currentProfile.photoURL || ""));
   $$("[data-profile-name]").forEach((e) => (e.textContent = currentProfile.fullName || ""));
   $$("[data-profile-handle]").forEach((e) => (e.textContent = "@" + (currentProfile.username || "")));
+  $$("[data-profile-id]").forEach((e) => (e.textContent = currentProfile.publicId ? String(currentProfile.publicId) : "—"));
   $$("[data-profile-subject]").forEach((e) => (e.textContent = subjectLabel((currentProfile.subjects || [])[0] || "")));
 
   const chips = $("[data-profile-subjects-chips]");
@@ -3733,6 +4067,9 @@ function renderProfile() {
   }
 }
 
+/* ============================================================
+   SETTINGS
+   ============================================================ */
 function renderSettings() {
   $$("[data-setting-theme]").forEach((r) => {
     r.checked = r.value === currentTheme;
@@ -3755,21 +4092,573 @@ function renderSettings() {
   });
 }
 
-function renderSupport() {
-  const copyBtn = $("[data-copy-number]");
-  if (!copyBtn || copyBtn.dataset.bound) return;
-  copyBtn.dataset.bound = "1";
-  copyBtn.addEventListener("click", () => {
-    const num = $("[data-support-number]")?.textContent?.trim() || "01016212814";
-    navigator.clipboard.writeText(num);
-    toast("تم النسخ", "success");
-    const labelSpan = copyBtn.querySelector("span");
-    if (labelSpan) {
-      const original = labelSpan.textContent;
-      labelSpan.textContent = "تم النسخ";
-      setTimeout(() => { labelSpan.textContent = original; }, 2000);
+/* ============================================================
+   CREDITS PAGE
+   ============================================================ */
+async function renderCreditsPage() {
+  const host = $("[data-credits-page]");
+  if (!host) return;
+
+  const balance = currentCredits?.balance ?? 0;
+  const totalAdded = currentCredits?.totalAdded ?? 0;
+  const totalSpent = currentCredits?.totalSpent ?? 0;
+  const plan = currentProfile?.subscription?.plan || "free";
+  const expiry = currentProfile?.subscription?.expiresAt;
+  const isLow = balance > 0 && balance < 20;
+
+  host.innerHTML = "";
+
+  const hero = el("div", { class: "credits-hero" });
+  hero.appendChild(el("div", { class: "credits-hero-label", text: "رصيدك الحالي" }));
+  const heroVal = el("div", { class: "credits-hero-value" });
+  heroVal.appendChild(document.createTextNode(String(balance)));
+  hero.appendChild(heroVal);
+  const heroPlan = el("div", { class: "credits-hero-plan" });
+  heroPlan.appendChild(svgIcon("star", 14));
+  heroPlan.appendChild(document.createTextNode(`باقة: ${planLabel(plan)}`));
+  if (plan !== "free" && expiry) heroPlan.appendChild(document.createTextNode(` · ينتهي: ${fmtDateShort(expiry)}`));
+  hero.appendChild(heroPlan);
+  host.appendChild(hero);
+
+  if (isLow) {
+    const warn = el("div", {
+      style: "padding:12px 16px;background:var(--warning-50);color:var(--warning-600);border:1px solid var(--warning-500);border-radius:var(--r-md);font-size:var(--fs-sm);font-weight:var(--fw-semibold)"
+    });
+    warn.textContent = "رصيدك منخفض — يُنصح بشراء باقة قبل الامتحانات القادمة.";
+    host.appendChild(warn);
+  }
+
+  const statsGrid = el("div", { class: "credits-stats" });
+  [
+    ["إجمالي المشحون", totalAdded],
+    ["إجمالي المستهلك", totalSpent]
+  ].forEach(([label, value]) => {
+    const s = el("div", { class: "credits-stat" });
+    s.appendChild(el("div", { class: "credits-stat-value", text: String(value) }));
+    s.appendChild(el("div", { class: "credits-stat-label", text: label }));
+    statsGrid.appendChild(s);
+  });
+  host.appendChild(statsGrid);
+
+  const cta = el("div", { class: "credits-cta" });
+  const buyBtn = el("button", { type: "button", class: "btn btn-gold btn-lg" });
+  buyBtn.appendChild(svgIcon("credit-card", 18));
+  buyBtn.appendChild(document.createTextNode(" اشتر باقة"));
+  buyBtn.addEventListener("click", () => navigate("/app/subscription"));
+  cta.appendChild(buyBtn);
+  host.appendChild(cta);
+
+  host.appendChild(el("h3", { class: "builder-panel-title mt-6", text: "سجل المعاملات" }));
+  const txHost = el("div", { class: "transactions-list" });
+  txHost.appendChild(el("div", { class: "sk-card" }, [
+    el("div", { class: "skeleton sk-line sk-sm" }),
+    el("div", { class: "skeleton sk-line sk-sm" })
+  ]));
+  host.appendChild(txHost);
+
+  try {
+    const txns = await loadTransactions(currentProfile.uid, 50);
+    txHost.innerHTML = "";
+    if (!txns.length) {
+      txHost.appendChild(el("div", { class: "empty", style: "padding:var(--sp-6)" }, [
+        el("p", { class: "text-muted", text: "لا يوجد معاملات بعد." })
+      ]));
+      return;
+    }
+    txns.forEach((tx) => {
+      const row = el("div", { class: "transaction-row" });
+      const isAdd = tx.amount > 0;
+      const icon = el("div", { class: `transaction-icon ${isAdd ? "is-add" : "is-spend"}` });
+      icon.appendChild(svgIcon(isAdd ? "plus" : "minus", 18));
+      row.appendChild(icon);
+
+      const info = el("div", { class: "transaction-info" });
+      const label = tx.note || (isAdd ? "إضافة رصيد" : sourceLabel(tx.source));
+      info.appendChild(el("div", { class: "transaction-label", text: label }));
+      info.appendChild(el("div", { class: "transaction-time", text: fmtDate(tx.createdAt) }));
+      row.appendChild(info);
+
+      row.appendChild(el("div", {
+        class: `transaction-amount ${isAdd ? "is-add" : "is-spend"}`,
+        text: `${isAdd ? "+" : ""}${tx.amount}`
+      }));
+      txHost.appendChild(row);
+    });
+  } catch {
+    txHost.innerHTML = "";
+    txHost.appendChild(el("div", { class: "empty", style: "padding:var(--sp-6)" }, [
+      el("p", { class: "text-muted", text: "تعذّر تحميل السجل." })
+    ]));
+  }
+}
+
+function sourceLabel(src) {
+  return {
+    signup: "رصيد ترحيبي",
+    manual_admin: "إضافة من الدعم",
+    subscription: "اشتراك باقة",
+    ai_explanation: "شرح AI",
+    ai_similar: "اقتراح أسئلة AI",
+    ai_essay_help: "تصحيح مقالي AI",
+    ai_analysis: "تحليل AI",
+    ai_grade_batch: "تصحيح الكل بـ AI Qeyas"
+  }[src] || "استخدام AI";
+}
+
+/* ============================================================
+   SUBSCRIPTION PAGE
+   ============================================================ */
+function renderSubscriptionPage() {
+  const host = $("[data-subscription-page]");
+  if (!host) return;
+
+  const currentPlan = currentProfile?.subscription?.plan || "free";
+  const expiry = currentProfile?.subscription?.expiresAt;
+
+  host.innerHTML = "";
+
+  const header = el("div", { style: "text-align:center;padding:var(--sp-6) 0" });
+  header.appendChild(el("h1", { style: "font-size:var(--fs-3xl);margin-bottom:var(--sp-2)", text: "اختر باقتك" }));
+  header.appendChild(el("p", { class: "text-secondary", text: "الاشتراك شهري، بيتم التجديد يدويًا بالتواصل مع الدعم." }));
+  if (currentPlan !== "free" && expiry) {
+    const sub = el("p", { class: "text-muted text-sm mt-3" });
+    sub.textContent = `باقتك الحالية: ${planLabel(currentPlan)} — تنتهي ${fmtDateShort(expiry)}`;
+    header.appendChild(sub);
+  }
+  host.appendChild(header);
+
+  const grid = el("div", { class: "pricing-grid" });
+  const packs = Object.values(CREDIT_PACKS).sort((a, b) => a.order - b.order);
+
+  packs.forEach((p) => {
+    const isCurrent = p.id === currentPlan;
+    const card = el("article", { class: `pricing-card ${p.badge ? "is-featured" : ""} ${isCurrent ? "is-current" : ""}` });
+    if (p.badge) card.appendChild(el("div", { class: "pricing-badge", text: p.badge }));
+    if (isCurrent) card.appendChild(el("div", { class: "pricing-current-badge", text: "الحالية" }));
+
+    const head = el("div", { class: "pricing-head" });
+    head.appendChild(el("h3", { class: "pricing-name", text: p.name }));
+    head.appendChild(el("p", { class: "pricing-desc", text: p.description }));
+    card.appendChild(head);
+
+    const price = el("div", { class: "pricing-price" });
+    price.appendChild(el("span", { class: "pricing-amount", text: String(p.priceEGP) }));
+    price.appendChild(el("span", { class: "pricing-currency", text: "جنيه" }));
+    price.appendChild(el("span", { class: "pricing-period", text: "/ شهريًا" }));
+    card.appendChild(price);
+
+    const feats = el("ul", { class: "pricing-features" });
+    const listItems = [
+      `${p.credits} كريدت AI Qeyas`,
+      "امتحانات غير محدودة",
+      "تصحيح تلقائي للموضوعي",
+      "نماذج متعددة",
+      "مراقبة ضد الغش"
+    ];
+    if (p.id !== "free") listItems.push("تحليلات متقدمة");
+    if (p.id === "premium" || p.id === "school") listItems.push("دعم أولوية");
+    if (p.id === "school") listItems.push("حسابات متعددة");
+    listItems.forEach((f) => {
+      const li = el("li");
+      li.appendChild(svgIcon("check", 16));
+      li.appendChild(el("span", { text: f }));
+      feats.appendChild(li);
+    });
+    card.appendChild(feats);
+
+    if (isCurrent && p.id !== "free") {
+      const renewBtn = el("button", {
+        type: "button", class: "btn btn-outline btn-block", text: "تجديد الباقة",
+        onclick: () => navigate(`/app/checkout?plan=${p.id}`)
+      });
+      card.appendChild(renewBtn);
+    } else if (p.id === "free") {
+      card.appendChild(el("button", {
+        type: "button", class: "btn btn-outline btn-block",
+        text: isCurrent ? "باقتك الحالية" : "الباقة المجانية",
+        disabled: "disabled"
+      }));
+    } else {
+      card.appendChild(el("button", {
+        type: "button", class: "btn btn-gold btn-block", text: "اشترك الآن",
+        onclick: () => navigate(`/app/checkout?plan=${p.id}`)
+      }));
+    }
+
+    grid.appendChild(card);
+  });
+
+  host.appendChild(grid);
+  host.appendChild(el("p", { class: "pricing-note", text: "الدفع يتم عبر التواصل مع الدعم بعد تأكيد الطلب." }));
+}
+
+/* ============================================================
+   CHECKOUT PAGE
+   ============================================================ */
+function renderCheckoutPage() {
+  const host = $("[data-checkout-page]");
+  if (!host) return;
+
+  const planId = currentParams?.get("plan");
+  const pack = CREDIT_PACKS[planId];
+  if (!pack || pack.id === "free") { navigate("/app/subscription"); return; }
+
+  host.innerHTML = "";
+
+  const summary = el("div", { class: "checkout-summary" });
+  summary.appendChild(el("div", {
+    style: "font-size:var(--fs-lg);font-weight:var(--fw-bold);margin-bottom:var(--sp-3)",
+    text: "ملخص الطلب"
+  }));
+  [
+    ["الباقة", pack.name],
+    ["الرصيد", `${pack.credits} كريدت`],
+    ["المدة", "شهر واحد"]
+  ].forEach(([k, v]) => {
+    summary.appendChild(el("div", { class: "checkout-summary-row" }, [
+      el("span", { text: k }), el("strong", { text: v })
+    ]));
+  });
+  summary.appendChild(el("div", { class: "checkout-summary-divider" }));
+  const totalRow = el("div", { class: "checkout-summary-total" });
+  totalRow.appendChild(el("span", { text: "الإجمالي" }));
+  totalRow.appendChild(el("span", { text: `${pack.priceEGP} جنيه` }));
+  summary.appendChild(totalRow);
+  host.appendChild(summary);
+
+  const form = el("div", { class: "checkout-form" });
+
+  const nameField = el("div", { class: "field" });
+  nameField.appendChild(el("label", { class: "field-label", text: "الاسم" }));
+  const nameInput = el("input", { type: "text", class: "input", readonly: "readonly" });
+  nameInput.value = currentProfile?.fullName || "";
+  nameField.appendChild(nameInput);
+  form.appendChild(nameField);
+
+  const idField = el("div", { class: "field" });
+  idField.appendChild(el("label", { class: "field-label", text: "الـ ID" }));
+  const idInput = el("input", { type: "text", class: "input", readonly: "readonly" });
+  idInput.value = currentProfile?.publicId ? String(currentProfile.publicId) : "—";
+  idField.appendChild(idInput);
+  form.appendChild(idField);
+
+  const phoneField = el("div", { class: "field" });
+  const phoneLabel = el("label", { class: "field-label" });
+  phoneLabel.appendChild(document.createTextNode("رقم الموبايل "));
+  phoneLabel.appendChild(el("span", { class: "text-danger", text: "*" }));
+  phoneField.appendChild(phoneLabel);
+  const phoneInput = el("input", {
+    type: "tel", class: "input", placeholder: "01xxxxxxxxx",
+    inputmode: "numeric", maxlength: "11", autocomplete: "tel"
+  });
+  phoneField.appendChild(phoneInput);
+  phoneField.appendChild(el("p", { class: "field-hint", text: "هنتواصل معاك على الرقم ده لتأكيد الاشتراك." }));
+  const phoneError = el("p", { class: "field-error", hidden: "hidden" });
+  phoneField.appendChild(phoneError);
+  form.appendChild(phoneField);
+
+  host.appendChild(form);
+
+  const note = el("div", { class: "checkout-whatsapp-note" });
+  note.appendChild(svgIcon("info", 18));
+  note.appendChild(el("div", {}, [
+    el("strong", { text: "الخطوة الجاية: " }),
+    document.createTextNode(`هيتم تحويلك على واتساب لرقم الدعم ${SUPPORT_PHONE} مع تفاصيل طلبك.`)
+  ]));
+  host.appendChild(note);
+
+  const actions = el("div", { class: "row", style: "gap:var(--sp-3);flex-wrap:wrap" });
+  const backBtn = el("button", {
+    type: "button", class: "btn btn-ghost btn-lg", text: "رجوع",
+    onclick: () => navigate("/app/subscription")
+  });
+  actions.appendChild(backBtn);
+
+  const confirmBtn = el("button", {
+    type: "button", class: "btn btn-gold btn-lg flex-1",
+    style: "min-width:200px"
+  });
+  confirmBtn.appendChild(svgIcon("whatsapp", 18));
+  confirmBtn.appendChild(document.createTextNode(" تأكيد واشترك"));
+  actions.appendChild(confirmBtn);
+
+  confirmBtn.addEventListener("click", async () => {
+    const phone = (phoneInput.value || "").trim();
+    phoneError.hidden = true;
+
+    if (!/^01[0-9]{9}$/.test(phone)) {
+      phoneError.hidden = false;
+      phoneError.textContent = "أدخل رقم موبايل مصري صحيح (11 رقم يبدأ بـ 01)";
+      phoneInput.focus();
+      return;
+    }
+
+    confirmBtn.classList.add("is-loading");
+    try {
+      const subRef = await addDoc(collection(db, "subscriptions"), {
+        uid: currentProfile.uid,
+        publicId: currentProfile.publicId || null,
+        name: currentProfile.fullName || "",
+        phone,
+        plan: pack.id,
+        planName: pack.name,
+        priceEGP: pack.priceEGP,
+        creditsGranted: pack.credits,
+        status: "pending",
+        createdAt: serverTimestamp()
+      });
+
+      const message = [
+        `السلام عليكم،`,
+        ``,
+        `عايز أشترك في باقة ${pack.name} على QeyasQuiz.`,
+        ``,
+        `الاسم: ${currentProfile.fullName || "—"}`,
+        `الـ ID: ${currentProfile.publicId || "—"}`,
+        `رقم الموبايل: ${phone}`,
+        `الباقة: ${pack.name} (${pack.credits} كريدت)`,
+        `السعر: ${pack.priceEGP} جنيه`,
+        `رقم الطلب: ${subRef.id}`
+      ].join("\n");
+
+      const waUrl = `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(message)}`;
+      window.open(waUrl, "_blank");
+
+      setTimeout(() => {
+        confirmBtn.classList.remove("is-loading");
+        openModal({
+          title: "تم إرسال طلبك",
+          body: el("div", { class: "stack-sm" }, [
+            el("p", { class: "text-secondary" }, [
+              document.createTextNode("لو واتساب مفتحش، كلّمنا على الرقم: ")
+            ]),
+            el("div", {
+              class: "card",
+              style: "text-align:center;padding:var(--sp-4);background:var(--gold-50);border-color:var(--gold-500)"
+            }, [el("div", { class: "support-transfer-number", style: "margin:0", text: SUPPORT_PHONE })]),
+            el("p", { class: "text-sm text-muted mt-3", text: "بعد ما تحوّل المبلغ وتأكدنا، رصيدك هيتحدّث تلقائيًا." })
+          ]),
+          actions: [{ label: "حسنًا", class: "btn-primary", onClick: () => navigate("/app/credits") }]
+        });
+      }, 500);
+    } catch (err) {
+      console.error("[checkout]", err);
+      confirmBtn.classList.remove("is-loading");
+      toast("فشل إنشاء الطلب. حاول مرة أخرى.", "error");
     }
   });
+
+  host.appendChild(actions);
+}
+
+/* ============================================================
+   ADMIN PAGE
+   ============================================================ */
+async function renderAdminPage() {
+  const host = $("[data-admin-page]");
+  if (!host) return;
+
+  if (!isUserAdmin) {
+    host.innerHTML = "";
+    host.appendChild(el("div", { class: "empty" }, [
+      el("h3", { text: "غير مصرح" }),
+      el("p", { text: "هذه الصفحة للمشرفين فقط." })
+    ]));
+    return;
+  }
+
+  host.innerHTML = "";
+
+  const header = el("div", { style: "margin-bottom:var(--sp-5)" });
+  header.appendChild(el("h1", { style: "font-size:var(--fs-3xl);margin-bottom:var(--sp-2)", text: "لوحة الأدمن" }));
+  header.appendChild(el("p", { class: "text-secondary", text: `مرحبًا ${currentProfile?.fullName || ""}` }));
+  host.appendChild(header);
+
+  // Stats
+  const statsGrid = el("div", { class: "grid grid-4" });
+  const statsData = [
+    { label: "المعلمين", id: "teachers" },
+    { label: "الامتحانات", id: "exams" },
+    { label: "المحاولات", id: "attempts" },
+    { label: "الاشتراكات المنتظرة", id: "pending" }
+  ];
+  statsData.forEach((s) => {
+    const card = el("div", { class: "card", style: "text-align:center" });
+    const val = el("div", { class: "stat-value", text: "—" });
+    val.id = `admin-stat-${s.id}`;
+    card.appendChild(val);
+    card.appendChild(el("div", { class: "card-subtitle", text: s.label }));
+    statsGrid.appendChild(card);
+  });
+  host.appendChild(statsGrid);
+
+  try {
+    const [usersSnap, examsSnap, attemptsSnap, subsSnap] = await Promise.all([
+      getDocs(collection(db, "users")),
+      getDocs(collection(db, "exams")),
+      getDocs(collection(db, "attempts")),
+      getDocs(query(collection(db, "subscriptions"), where("status", "==", "pending")))
+    ]);
+    const setStat = (id, value) => {
+      const e = document.getElementById(`admin-stat-${id}`);
+      if (e) e.textContent = String(value);
+    };
+    setStat("teachers", usersSnap.size);
+    setStat("exams", examsSnap.size);
+    setStat("attempts", attemptsSnap.size);
+    setStat("pending", subsSnap.size);
+  } catch (err) { console.warn("[admin stats]", err); }
+
+  host.appendChild(el("h2", { class: "builder-panel-title mt-6", text: "الاشتراكات المنتظرة" }));
+  const pendingHost = el("div", { class: "stack", id: "admin-pending-subs" });
+  host.appendChild(pendingHost);
+
+  await loadPendingSubscriptions(pendingHost);
+}
+
+async function loadPendingSubscriptions(host) {
+  host.innerHTML = "";
+  try {
+    const snap = await getDocs(query(
+      collection(db, "subscriptions"),
+      where("status", "==", "pending"),
+      orderBy("createdAt", "desc")
+    ));
+    const subs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    if (!subs.length) {
+      host.appendChild(el("div", { class: "empty", style: "padding:var(--sp-6)" }, [
+        el("p", { class: "text-muted", text: "لا يوجد اشتراكات منتظرة حاليًا." })
+      ]));
+      return;
+    }
+
+    subs.forEach((sub) => {
+      const row = el("div", { class: "card" });
+
+      const top = el("div", { class: "row-between mb-3" });
+      const info = el("div", {});
+      info.appendChild(el("div", { class: "fw-bold", text: sub.name || "—" }));
+      info.appendChild(el("div", { class: "text-sm text-muted", text: `ID: ${sub.publicId || "—"} · ${sub.phone || "—"}` }));
+      top.appendChild(info);
+      top.appendChild(el("span", { class: "badge badge-in_progress", text: planLabel(sub.plan) }));
+      row.appendChild(top);
+
+      const details = el("div", { class: "quick-report-item" });
+      details.appendChild(el("span", { class: "quick-report-label", text: "الباقة" }));
+      details.appendChild(el("span", { class: "quick-report-value", text: `${sub.creditsGranted} كريدت` }));
+      details.appendChild(el("span", { class: "quick-report-sub", text: `${sub.priceEGP} جنيه · ${fmtDate(sub.createdAt)}` }));
+      row.appendChild(details);
+
+      const actions = el("div", { class: "row mt-4", style: "gap:var(--sp-2)" });
+
+      const approveBtn = el("button", { type: "button", class: "btn btn-success btn-sm", text: "موافقة وتفعيل" });
+      approveBtn.addEventListener("click", () => approveSubscription(sub, approveBtn));
+      actions.appendChild(approveBtn);
+
+      const rejectBtn = el("button", { type: "button", class: "btn btn-ghost btn-sm", text: "رفض" });
+      rejectBtn.addEventListener("click", () => rejectSubscription(sub, rejectBtn));
+      actions.appendChild(rejectBtn);
+
+      row.appendChild(actions);
+      host.appendChild(row);
+    });
+  } catch (err) {
+    console.error("[admin subs]", err);
+    host.appendChild(el("div", { class: "empty", style: "padding:var(--sp-6)" }, [
+      el("p", { class: "text-muted", text: err.code === "permission-denied" ? "غير مصرح." : "تعذّر التحميل." })
+    ]));
+  }
+}
+
+async function approveSubscription(sub, btn) {
+  btn.classList.add("is-loading");
+  try {
+    const now = new Date();
+    const expiresAt = new Date(now);
+    expiresAt.setDate(expiresAt.getDate() + 30);
+
+    await runTransaction(db, async (tx) => {
+      const subRef = doc(db, "subscriptions", sub.id);
+      tx.update(subRef, {
+        status: "active",
+        approvedBy: currentUser.uid,
+        approvedAt: serverTimestamp(),
+        startedAt: serverTimestamp(),
+        expiresAt: Timestamp.fromDate(expiresAt)
+      });
+
+      const creditRef = doc(db, "userCredits", sub.uid);
+      const creditSnap = await tx.get(creditRef);
+      const currentBalance = creditSnap.exists() ? (creditSnap.data().balance || 0) : 0;
+      const newBalance = currentBalance + sub.creditsGranted;
+
+      if (creditSnap.exists()) {
+        tx.update(creditRef, {
+          balance: newBalance,
+          totalAdded: (creditSnap.data().totalAdded || 0) + sub.creditsGranted,
+          lastTopUpAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      } else {
+        tx.set(creditRef, {
+          uid: sub.uid,
+          balance: newBalance,
+          totalAdded: sub.creditsGranted,
+          totalSpent: 0,
+          monthlyGranted: sub.creditsGranted,
+          monthlySpent: 0,
+          signupBonusGranted: true,
+          lastTopUpAt: serverTimestamp(),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
+
+      const txRef = doc(collection(db, "creditTransactions"));
+      tx.set(txRef, {
+        uid: sub.uid, type: "add", amount: sub.creditsGranted,
+        source: "subscription",
+        note: `اشتراك ${planLabel(sub.plan)} — ${sub.priceEGP} جنيه`,
+        balanceAfter: newBalance,
+        createdAt: serverTimestamp()
+      });
+
+      const userRef = doc(db, "users", sub.uid);
+      tx.update(userRef, {
+        subscription: {
+          plan: sub.plan,
+          status: "active",
+          startedAt: serverTimestamp(),
+          expiresAt: Timestamp.fromDate(expiresAt),
+          lastRenewalAt: serverTimestamp()
+        },
+        updatedAt: serverTimestamp()
+      });
+    });
+
+    toast("تم تفعيل الاشتراك", "success");
+    await loadPendingSubscriptions($("#admin-pending-subs"));
+  } catch (err) {
+    console.error("[approve]", err);
+    toast(err.code === "permission-denied" ? "غير مصرح" : "فشل التفعيل", "error");
+  } finally { btn.classList.remove("is-loading"); }
+}
+
+async function rejectSubscription(sub, btn) {
+  btn.classList.add("is-loading");
+  try {
+    await updateDoc(doc(db, "subscriptions", sub.id), {
+      status: "rejected",
+      approvedBy: currentUser.uid,
+      approvedAt: serverTimestamp()
+    });
+    toast("تم الرفض", "info");
+    await loadPendingSubscriptions($("#admin-pending-subs"));
+  } catch (err) {
+    console.error("[reject]", err);
+    toast(err.code === "permission-denied" ? "غير مصرح" : "فشل الرفض", "error");
+  } finally { btn.classList.remove("is-loading"); }
 }
 
 /* ============================================================
@@ -3787,17 +4676,13 @@ async function renderExam(params) {
   const errorBox = $("[data-exam-error]");
   const entryModal = $("[data-entry-modal]");
 
-  loading.hidden = false;
-  shell.hidden = true;
-  errorBox.hidden = true;
-  entryModal.hidden = true;
+  loading.hidden = false; shell.hidden = true; errorBox.hidden = true; entryModal.hidden = true;
 
   const oldLB = document.querySelector("[data-exam-leaderboard]");
   if (oldLB) oldLB.remove();
 
   if (!examId) {
-    loading.hidden = true;
-    errorBox.hidden = false;
+    loading.hidden = true; errorBox.hidden = false;
     $("[data-exam-error-title]").textContent = "بيانات ناقصة";
     $("[data-exam-error-message]").textContent = "لم يتم تحديد رقم الامتحان.";
     return;
@@ -3807,23 +4692,20 @@ async function renderExam(params) {
   try { exam = await getExam(examId); } catch (err) { console.error(err); }
 
   if (!exam) {
-    loading.hidden = true;
-    errorBox.hidden = false;
+    loading.hidden = true; errorBox.hidden = false;
     $("[data-exam-error-title]").textContent = "غير موجود";
     $("[data-exam-error-message]").textContent = "هذا الامتحان غير متاح.";
     return;
   }
 
   if (preview && currentUser && currentProfile?.uid === exam.ownerId) {
-    loading.hidden = true;
-    shell.hidden = false;
+    loading.hidden = true; shell.hidden = false;
     startExamRuntime(exam, { preview: true });
     return;
   }
 
   if (!exam.publishedAt) {
-    loading.hidden = true;
-    errorBox.hidden = false;
+    loading.hidden = true; errorBox.hidden = false;
     $("[data-exam-error-title]").textContent = "الامتحان غير منشور";
     $("[data-exam-error-message]").textContent = "هذا الامتحان لم يُنشر بعد.";
     return;
@@ -3839,24 +4721,21 @@ async function renderExam(params) {
   }
 
   if (status === "paused") {
-    loading.hidden = true;
-    errorBox.hidden = false;
+    loading.hidden = true; errorBox.hidden = false;
     $("[data-exam-error-title]").textContent = "الامتحان متوقف مؤقتًا";
     $("[data-exam-error-message]").textContent = "قام المعلم بإيقاف الامتحان. يرجى المحاولة لاحقًا.";
     return;
   }
 
   if (status === "scheduled") {
-    loading.hidden = true;
-    errorBox.hidden = false;
+    loading.hidden = true; errorBox.hidden = false;
     $("[data-exam-error-title]").textContent = "الامتحان لم يبدأ";
     $("[data-exam-error-message]").textContent = `يفتح في ${fmtDate(exam.startAt)}`;
     return;
   }
 
   if (status === "completed") {
-    loading.hidden = true;
-    errorBox.hidden = false;
+    loading.hidden = true; errorBox.hidden = false;
     $("[data-exam-error-title]").textContent = "الامتحان مغلق";
     $("[data-exam-error-message]").textContent = "انتهى هذا الامتحان. سيتم عرض النتائج والمراكز بعد اكتمال التصحيح.";
     return;
@@ -3869,8 +4748,7 @@ async function renderExam(params) {
       if (existingAttempt) {
         const s = existingAttempt.status;
         if (s === "submitted" || s === "graded") {
-          loading.hidden = true;
-          showEntryModal(exam, existingAttempt);
+          loading.hidden = true; showEntryModal(exam, existingAttempt);
           return;
         }
         loading.hidden = true;
@@ -3879,9 +4757,7 @@ async function renderExam(params) {
         startExamRuntime(exam, { attempt: existingAttempt });
         return;
       }
-    } catch (err) {
-      console.warn("[renderExam] check existing:", err);
-    }
+    } catch (err) { console.warn("[renderExam] check existing:", err); }
   }
 
   loading.hidden = true;
@@ -3936,7 +4812,6 @@ async function showEntryModal(exam, existingAttempt = null) {
     setEntryState("already-taken");
     return;
   }
-
   await resolveEntryState();
 }
 
@@ -3944,16 +4819,8 @@ async function resolveEntryState() {
   const exam = entryState.exam;
   const user = auth.currentUser;
 
-  if (!user) {
-    setEntryState("signed-out");
-    return;
-  }
-
-  if (entryState.attempt) {
-    fillAlreadyTakenState(entryState.attempt);
-    setEntryState("already-taken");
-    return;
-  }
+  if (!user) { setEntryState("signed-out"); return; }
+  if (entryState.attempt) { fillAlreadyTakenState(entryState.attempt); setEntryState("already-taken"); return; }
 
   const existingAttempt = await getStudentAttempt(exam.id, user.uid);
   if (existingAttempt) {
@@ -3991,9 +4858,7 @@ function setEntryState(mode) {
   states.forEach((s) => { s.hidden = s.dataset.entryState !== mode; });
 
   const codeField = $("[data-entry-code-field]");
-  if (codeField) {
-    codeField.hidden = mode !== "ready" || !entryState.exam.requireAccessCode;
-  }
+  if (codeField) codeField.hidden = mode !== "ready" || !entryState.exam.requireAccessCode;
 }
 
 function fillNeedNameState(user) {
@@ -4048,7 +4913,7 @@ function fillAlreadyTakenState(attempt) {
     icon.style.color = "var(--warning-500)";
     icon.innerHTML = '<svg class="icon" width="48" height="48"><use href="#i-clock"></use></svg>';
     title.textContent = "جارٍ التصحيح";
-    text.textContent = "الامتحان بانتظار تصحيح المعلم. تقدر ترجع لاحقًا لمشاهدة النتيجة.";
+    text.textContent = "الامتحان بانتظار تصحيح المعلم.";
   }
 
   info.innerHTML = "";
@@ -4063,10 +4928,7 @@ function fillAlreadyTakenState(attempt) {
   }
 
   rows.forEach(([k, v]) => {
-    info.appendChild(el("div", { class: "row-between" }, [
-      el("span", { text: k }),
-      el("span", { text: v })
-    ]));
+    info.appendChild(el("div", { class: "row-between" }, [el("span", { text: k }), el("span", { text: v })]));
   });
 
   const viewBtn = $("[data-entry-view-result]");
@@ -4076,9 +4938,6 @@ function fillAlreadyTakenState(attempt) {
   }
 }
 
-/* ============================================================
-   ENTRY EVENT HANDLERS
-   ============================================================ */
 function bindEntryHandlers() {
   const modal = $("[data-entry-modal]");
   if (!modal || modal.dataset.bound) return;
@@ -4088,14 +4947,9 @@ function bindEntryHandlers() {
   if (googleBtn) {
     googleBtn.addEventListener("click", async () => {
       googleBtn.classList.add("is-loading");
-      try {
-        await signInWithGoogle();
-        await resolveEntryState();
-      } catch (err) {
-        toast(err.message || "تعذّر تسجيل الدخول", "error");
-      } finally {
-        googleBtn.classList.remove("is-loading");
-      }
+      try { await signInWithGoogle(); await resolveEntryState(); }
+      catch (err) { toast(err.message || "تعذّر تسجيل الدخول", "error"); }
+      finally { googleBtn.classList.remove("is-loading"); }
     });
   }
 
@@ -4107,31 +4961,18 @@ function bindEntryHandlers() {
       const val = (input.value || "").trim();
       const words = val.split(/\s+/).filter(Boolean);
 
-      if (words.length < 4) {
-        err.hidden = false;
-        err.textContent = "اكتب اسمك الرباعي (4 كلمات على الأقل)";
-        return;
-      }
-      if (val.length > 120) {
-        err.hidden = false;
-        err.textContent = "الاسم طويل جدًا";
-        return;
-      }
+      if (words.length < 4) { err.hidden = false; err.textContent = "اكتب اسمك الرباعي (4 كلمات على الأقل)"; return; }
+      if (val.length > 120) { err.hidden = false; err.textContent = "الاسم طويل جدًا"; return; }
 
       err.hidden = true;
       saveBtn.classList.add("is-loading");
-
       try {
         const user = auth.currentUser;
         const profile = await saveStudentProfile(user.uid, val);
         currentStudentProfile = profile;
         await resolveEntryState();
-      } catch (err2) {
-        console.error(err2);
-        toast("تعذّر حفظ الاسم. حاول مرة أخرى.", "error");
-      } finally {
-        saveBtn.classList.remove("is-loading");
-      }
+      } catch { toast("تعذّر حفظ الاسم. حاول مرة أخرى.", "error"); }
+      finally { saveBtn.classList.remove("is-loading"); }
     });
   }
 
@@ -4146,9 +4987,7 @@ function bindEntryHandlers() {
         const codeInput = $("[data-entry-code]");
         const codeErr = $("[data-entry-code-error]");
         if ((codeInput.value || "").trim() !== (exam.accessCode || "")) {
-          codeErr.hidden = false;
-          codeErr.textContent = "كود غير صحيح";
-          return;
+          codeErr.hidden = false; codeErr.textContent = "كود غير صحيح"; return;
         }
         codeErr.hidden = true;
       }
@@ -4163,8 +5002,7 @@ function bindEntryHandlers() {
 
       const studentProfile = currentStudentProfile || await loadStudentProfile(user.uid);
       if (!studentProfile || !studentProfile.fullName) {
-        toast("حدث خطأ، حاول مرة أخرى", "error");
-        return;
+        toast("حدث خطأ، حاول مرة أخرى", "error"); return;
       }
 
       startBtn.classList.add("is-loading");
@@ -4173,11 +5011,7 @@ function bindEntryHandlers() {
         modal.hidden = true;
         $("[data-exam-shell]").hidden = false;
         startExamRuntime(exam, { attempt });
-      } catch (err) {
-        console.error(err);
-        toast("تعذّر بدء الامتحان", "error");
-        startBtn.classList.remove("is-loading");
-      }
+      } catch (err) { console.error(err); toast("تعذّر بدء الامتحان", "error"); startBtn.classList.remove("is-loading"); }
     });
   }
 
@@ -4222,17 +5056,12 @@ async function createAttempt(exam, studentName, studentUid) {
   const payload = {
     examId: exam.id,
     formId: chosenForm.id,
-    studentUid,
-    studentName,
+    studentUid, studentName,
     questionOrder: order,
-    answers: {},
-    manualScores: {},
-    feedback: {},
+    answers: {}, manualScores: {}, feedback: {},
     status: "in_progress",
     startedAt: serverTimestamp(),
-    startedAtMs: nowMs,
-    deadlineMs,
-    resultCode,
+    startedAtMs: nowMs, deadlineMs, resultCode,
     anticheatEvents: [],
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp()
@@ -4250,20 +5079,15 @@ async function createAttempt(exam, studentName, studentUid) {
 function startExamRuntime(exam, opts) {
   const { attempt, preview = false } = opts;
   const safeAttempt = attempt || {
-    id: null,
-    studentName: "معاينة",
-    formId: null,
-    answers: {},
-    questionOrder: null,
+    id: null, studentName: "معاينة", formId: null,
+    answers: {}, questionOrder: null,
     deadlineMs: Date.now() + (exam.duration || 60) * 60000
   };
 
   const forms = exam.forms && exam.forms.length
     ? exam.forms
     : [{ id: "A", name: "النموذج أ", questions: exam.questions || [] }];
-  const form = preview
-    ? forms[0]
-    : (forms.find((f) => f.id === safeAttempt.formId) || forms[0]);
+  const form = preview ? forms[0] : (forms.find((f) => f.id === safeAttempt.formId) || forms[0]);
   const questions = form.questions || [];
 
   const byId = {};
@@ -4283,8 +5107,7 @@ function startExamRuntime(exam, opts) {
     timerInterval: null, autosaveInterval: null, heartbeatInterval: null,
     watcherUnsub: null,
     dirty: false, submitted: false, pendingExam: null,
-    warningCount: 0,
-    fsExitCount: 0,
+    warningCount: 0, fsExitCount: 0,
     fsGuardActive: exam.requireFullscreen !== false
   };
   examRuntime = state;
@@ -4309,23 +5132,16 @@ function startExamRuntime(exam, opts) {
   startTimer();
 
   if (!preview) {
-    startHeartbeat();
-    startAutosave();
-    startAnticheat();
+    startHeartbeat(); startAutosave(); startAnticheat();
     if (state.fsGuardActive) startFullscreenGuard();
-
     const initialMs = exam.updatedAt?.toMillis?.() || (exam.updatedAt?.seconds * 1000) || 0;
     state.watcherUnsub = startExamRealtimeWatcher(exam.id, initialMs);
   }
 
   $("[data-exam-fullscreen]").onclick = () => {
     if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen?.().catch(() => {
-        toast("تعذّر الدخول لملء الشاشة", "error");
-      });
-    } else {
-      document.exitFullscreen?.();
-    }
+      document.documentElement.requestFullscreen?.().catch(() => toast("تعذّر الدخول لملء الشاشة", "error"));
+    } else document.exitFullscreen?.();
   };
 
   $("[data-submit-exam]").onclick = () => confirmSubmit();
@@ -4337,16 +5153,13 @@ function startExamRuntime(exam, opts) {
 
   const beforeUnloadHandler = (e) => {
     if (!state.submitted && !state.preview) {
-      e.preventDefault();
-      e.returnValue = "";
-      return "";
+      e.preventDefault(); e.returnValue = ""; return "";
     }
   };
   window.addEventListener("beforeunload", beforeUnloadHandler);
   state._beforeUnloadHandler = beforeUnloadHandler;
 }
 
-/* ---- Scroll Mode ---- */
 function renderScrollMode() {
   const s = examRuntime;
   const host = $("[data-questions-host-scroll]");
@@ -4362,7 +5175,6 @@ function renderScrollMode() {
   updateProgress();
 }
 
-/* ---- Single Mode ---- */
 function renderSingleMode() {
   renderSingleNavList();
   showSingleQuestion(0);
@@ -4401,15 +5213,12 @@ function showSingleQuestion(idx) {
 
   const wrap = el("div", { class: "exam-question" });
   wrap.appendChild(buildQuestionHeader(q, s.index));
+  if (q.header) wrap.appendChild(el("div", { class: "q-header-text", text: q.header }));
   wrap.appendChild(el("div", { class: "q-text", text: q.text || "" }));
   if (q.imageUrl) wrap.appendChild(el("img", { class: "q-image", src: q.imageUrl, alt: "", draggable: "false" }));
 
   const answers = { ...(s.answers[qid] || {}) };
-  wrap.appendChild(buildQuestionInputs(q, answers, qid, () => {
-    updateProgress();
-    renderSingleNavList();
-  }));
-
+  wrap.appendChild(buildQuestionInputs(q, answers, qid, () => { updateProgress(); renderSingleNavList(); }));
   host.appendChild(wrap);
 
   const prevBtn = $("[data-prev]");
@@ -4421,11 +5230,11 @@ function showSingleQuestion(idx) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-/* ---- Shared ---- */
 function buildQuestionBlock(q, i, qid) {
   const s = examRuntime;
   const wrap = el("div", { class: "exam-question" });
   wrap.appendChild(buildQuestionHeader(q, i));
+  if (q.header) wrap.appendChild(el("div", { class: "q-header-text", text: q.header }));
   wrap.appendChild(el("div", { class: "q-text", text: q.text || "" }));
   if (q.imageUrl) wrap.appendChild(el("img", { class: "q-image", src: q.imageUrl, alt: "", draggable: "false" }));
 
@@ -4459,8 +5268,7 @@ function buildQuestionInputs(q, answers, qid, onChange) {
         answers.selectedIndex = i;
         optsWrap.querySelectorAll(".q-option").forEach((o) => o.classList.remove("is-selected"));
         optEl.classList.add("is-selected");
-        saveAnswer(qid, answers);
-        onChange();
+        saveAnswer(qid, answers); onChange();
       });
       optEl.appendChild(inp);
       optEl.appendChild(el("span", { class: "q-option-mark", text: String.fromCharCode(65 + i) }));
@@ -4480,8 +5288,7 @@ function buildQuestionInputs(q, answers, qid, onChange) {
         answers.boolValue = v;
         wrap.querySelectorAll(".q-option").forEach((o) => o.classList.remove("is-selected"));
         optEl.classList.add("is-selected");
-        saveAnswer(qid, answers);
-        onChange();
+        saveAnswer(qid, answers); onChange();
       });
       optEl.appendChild(inp);
       optEl.appendChild(el("span", { class: "q-option-text", text: l }));
@@ -4495,8 +5302,7 @@ function buildQuestionInputs(q, answers, qid, onChange) {
     input.value = answers.textValue || "";
     input.addEventListener("input", debounce(() => {
       answers.textValue = input.value;
-      saveAnswer(qid, answers);
-      onChange();
+      saveAnswer(qid, answers); onChange();
     }, 400));
     frag.appendChild(input);
   } else if (q.type === "essay") {
@@ -4505,8 +5311,7 @@ function buildQuestionInputs(q, answers, qid, onChange) {
     ta.value = answers.essayText || "";
     ta.addEventListener("input", debounce(() => {
       answers.essayText = ta.value;
-      saveAnswer(qid, answers);
-      onChange();
+      saveAnswer(qid, answers); onChange();
     }, 500));
     frag.appendChild(ta);
   }
@@ -4518,16 +5323,14 @@ function buildJustification(q, answers, qid, onChange) {
   const box = el("div", { class: "q-justification" });
   const label = el("div", { class: "q-justification-label" });
   label.appendChild(svgIcon("check-square", 14));
-  label.appendChild(document.createTextNode("التبرير (تصحيح يدوي)"));
+  label.appendChild(document.createTextNode("التبرير (تصحيح يدوي/AI)"));
   box.appendChild(label);
-
   const ta = el("textarea", { class: "q-justification-textarea" });
   ta.placeholder = "اكتب تبريرك…";
   ta.value = answers.justification || "";
   ta.addEventListener("input", debounce(() => {
     answers.justification = ta.value;
-    saveAnswer(qid, answers);
-    onChange();
+    saveAnswer(qid, answers); onChange();
   }, 500));
   box.appendChild(ta);
   return box;
@@ -4536,11 +5339,8 @@ function buildJustification(q, answers, qid, onChange) {
 function saveAnswer(qid, answers) {
   const s = examRuntime;
   if (!s || s.preview) return;
-  try {
-    s.answers[qid] = JSON.parse(JSON.stringify(answers));
-  } catch {
-    s.answers[qid] = { ...answers };
-  }
+  try { s.answers[qid] = JSON.parse(JSON.stringify(answers)); }
+  catch { s.answers[qid] = { ...answers }; }
   s.dirty = true;
 }
 
@@ -4564,7 +5364,6 @@ function updateProgress() {
   if (text) text.textContent = pct + "%";
 }
 
-/* ---- Timer ---- */
 function startTimer() {
   const s = examRuntime;
   const elVal = $("[data-timer-value]");
@@ -4591,7 +5390,6 @@ function startTimer() {
   s.timerInterval = setInterval(tick, 1000);
 }
 
-/* ---- Autosave ---- */
 function startAutosave() {
   const s = examRuntime;
   s.autosaveInterval = setInterval(async () => {
@@ -4600,28 +5398,23 @@ function startAutosave() {
     try {
       const cleanAnswers = JSON.parse(JSON.stringify(s.answers || {}));
       await updateDoc(doc(db, "attempts", s.attempt.id), {
-        answers: cleanAnswers,
-        updatedAt: serverTimestamp()
+        answers: cleanAnswers, updatedAt: serverTimestamp()
       });
       s.dirty = false;
     } catch (err) { console.warn("autosave", err); }
   }, 5000);
 }
 
-/* ---- Heartbeat ---- */
 function startHeartbeat() {
   const s = examRuntime;
   s.heartbeatInterval = setInterval(async () => {
     if (s.submitted || !navigator.onLine) return;
     try {
-      await updateDoc(doc(db, "attempts", s.attempt.id), {
-        lastActiveAt: serverTimestamp()
-      });
+      await updateDoc(doc(db, "attempts", s.attempt.id), { lastActiveAt: serverTimestamp() });
     } catch {}
   }, 15000);
 }
 
-/* ---- Anti-cheat (3 warnings) ---- */
 function startAnticheat() {
   const s = examRuntime;
   if (!s) return;
@@ -4649,29 +5442,43 @@ function startAnticheat() {
     $("[data-security-ok]").onclick = () => { modal.hidden = true; };
   }
 
+  let screenshotReleaseTimer = null;
+
+  function engageShield(reason) {
+    if (s.submitted || s.preview) return;
+    document.body.classList.add("screenshot-active");
+    if (reason) logEvent(reason);
+  }
+
+  function releaseShield(delay = 80) {
+    if (s.submitted || s.preview) return;
+    clearTimeout(screenshotReleaseTimer);
+    screenshotReleaseTimer = setTimeout(() => {
+      document.body.classList.remove("screenshot-active");
+    }, delay);
+  }
+
+  const onWindowBlur = () => { if (!s.submitted && !s.preview) engageShield("window_blur"); };
+  const onWindowFocus = () => { if (!s.submitted && !s.preview) { releaseShield(100); logEvent("window_focus"); } };
+
   const onVisibility = () => {
     if (s.submitted || s.preview) return;
-
     if (document.hidden) {
+      engageShield(null);
       s.warningCount = (s.warningCount || 0) + 1;
       logEvent("tab_hidden", { warningNumber: s.warningCount });
-
       const remaining = 3 - s.warningCount;
 
       if (s.warningCount < 3) {
         securityAlert(
           `تحذير ${s.warningCount} من 3`,
           `لقد تركت صفحة الامتحان. تحذير ${s.warningCount} من 3. ${
-            remaining === 1
-              ? "تحذير أخير! لو خرجت مرة أخرى سيتم تسليم ورقتك فورًا."
-              : `باقي ${remaining} تحذيرات قبل التسليم التلقائي.`
+            remaining === 1 ? "تحذير أخير! لو خرجت مرة أخرى سيتم تسليم ورقتك فورًا." 
+            : `باقي ${remaining} تحذيرات قبل التسليم التلقائي.`
           }`
         );
       } else {
-        securityAlert(
-          "تجاوزت الحد",
-          "لقد تجاوزت الحد المسموح من التحذيرات (3 مرات). سيتم تسليم ورقتك تلقائيًا الآن."
-        );
+        securityAlert("تجاوزت الحد", "لقد تجاوزت الحد المسموح من التحذيرات (3 مرات). سيتم تسليم ورقتك تلقائيًا الآن.");
         setTimeout(async () => {
           if (!s.submitted) {
             toast("تم تسليم الامتحان لتجاوز حد التحذيرات", "error");
@@ -4680,14 +5487,24 @@ function startAnticheat() {
         }, 2000);
       }
     } else {
+      releaseShield(100);
       logEvent("tab_visible");
+    }
+  };
+
+  const onPrintScreen = (e) => {
+    if (s.submitted || s.preview) return;
+    if (e.key === "PrintScreen" || e.code === "PrintScreen") {
+      try { navigator.clipboard.writeText("").catch(() => {}); } catch {}
+      logEvent("printscreen_blocked");
+      toast("السكرين شوت غير مسموح أثناء الامتحان", "warning", 2500);
     }
   };
 
   const onCopy = (e) => {
     if (s.submitted || s.preview) return;
-    const target = e.target;
-    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
     e.preventDefault();
     try { e.clipboardData.setData("text/plain", ""); } catch {}
     logEvent("copy_attempt");
@@ -4695,27 +5512,18 @@ function startAnticheat() {
 
   const onCut = (e) => {
     if (s.submitted || s.preview) return;
-    const target = e.target;
-    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
     e.preventDefault();
     logEvent("cut_attempt");
   };
 
   const onPaste = (e) => {
     if (s.submitted) return;
-
-    const isOwnerPreview =
-      s.preview &&
-      currentProfile &&
-      currentProfile.uid === s.exam.ownerId;
+    const isOwnerPreview = s.preview && currentProfile && currentProfile.uid === s.exam.ownerId;
     if (isOwnerPreview) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-    try {
-      if (e.clipboardData) e.clipboardData.setData("text/plain", "");
-    } catch {}
-
+    e.preventDefault(); e.stopPropagation();
+    try { if (e.clipboardData) e.clipboardData.setData("text/plain", ""); } catch {}
     logEvent("paste_blocked");
     toast("اللصق غير مسموح داخل الامتحان", "warning", 2500);
     return false;
@@ -4723,8 +5531,8 @@ function startAnticheat() {
 
   const onContextMenu = (e) => {
     if (s.submitted || s.preview) return;
-    const target = e.target;
-    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
     e.preventDefault();
     logEvent("context_menu");
   };
@@ -4733,20 +5541,15 @@ function startAnticheat() {
     if (s.submitted || s.preview) return;
     const ctrl = e.ctrlKey || e.metaKey;
     const key = (e.key || "").toLowerCase();
-    const target = e.target;
-    const isInput = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA");
+    const t = e.target;
+    const isInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA");
 
     if (ctrl && ["c", "x", "a"].includes(key) && isInput) return;
     if (ctrl && ["c", "x", "a", "s", "p", "u"].includes(key)) {
-      e.preventDefault();
-      e.stopPropagation();
-      logEvent("shortcut_" + key);
-      return false;
+      e.preventDefault(); e.stopPropagation(); logEvent("shortcut_" + key); return false;
     }
     if (key === "f12" || (ctrl && e.shiftKey && ["i", "j", "c"].includes(key))) {
-      e.preventDefault();
-      logEvent("devtools_attempt");
-      return false;
+      e.preventDefault(); logEvent("devtools_attempt"); return false;
     }
   };
 
@@ -4768,6 +5571,9 @@ function startAnticheat() {
   document.addEventListener("paste", onPaste, true);
   document.addEventListener("contextmenu", onContextMenu, true);
   document.addEventListener("keydown", onKeyDown, true);
+  document.addEventListener("keyup", onPrintScreen);
+  window.addEventListener("blur", onWindowBlur);
+  window.addEventListener("focus", onWindowFocus);
   window.addEventListener("offline", onOffline);
   window.addEventListener("online", onOnline);
 
@@ -4782,10 +5588,7 @@ function startAnticheat() {
 
   [document.querySelector("[data-questions-host-scroll]"),
    document.querySelector("[data-single-question-host]")].forEach((x) => {
-    if (x) {
-      x.style.userSelect = "none";
-      x.style.webkitUserSelect = "none";
-    }
+    if (x) { x.style.userSelect = "none"; x.style.webkitUserSelect = "none"; }
   });
 
   s._anticheatCleanup = () => {
@@ -4795,9 +5598,14 @@ function startAnticheat() {
     document.removeEventListener("paste", onPaste, true);
     document.removeEventListener("contextmenu", onContextMenu, true);
     document.removeEventListener("keydown", onKeyDown, true);
+    document.removeEventListener("keyup", onPrintScreen);
+    window.removeEventListener("blur", onWindowBlur);
+    window.removeEventListener("focus", onWindowFocus);
     window.removeEventListener("offline", onOffline);
     window.removeEventListener("online", onOnline);
     clearInterval(devtoolsInterval);
+    clearTimeout(screenshotReleaseTimer);
+    document.body.classList.remove("screenshot-active");
   };
 }
 
@@ -4809,11 +5617,8 @@ function startMovingWatermark() {
   let lx = 0, ly = 0;
   const interval = setInterval(() => {
     let x, y, tries = 0;
-    do {
-      x = Math.random() * 100 - 50;
-      y = Math.random() * 100 - 50;
-      tries++;
-    } while (Math.abs(x - lx) < 30 && Math.abs(y - ly) < 30 && tries < 10);
+    do { x = Math.random() * 100 - 50; y = Math.random() * 100 - 50; tries++; }
+    while (Math.abs(x - lx) < 30 && Math.abs(y - ly) < 30 && tries < 10);
     lx = x; ly = y;
     wm.style.transform = `translate(${x}px, ${y}px)`;
   }, 3000);
@@ -4827,7 +5632,6 @@ function startMovingWatermark() {
   }
 }
 
-/* ---- Fullscreen Guard ---- */
 function startFullscreenGuard() {
   const s = examRuntime;
   if (!s || s.preview) return;
@@ -4863,19 +5667,14 @@ function startFullscreenGuard() {
       const rootEl = document.documentElement;
       if (rootEl.requestFullscreen) await rootEl.requestFullscreen({ navigationUI: "hide" });
       else if (rootEl.webkitRequestFullscreen) await rootEl.webkitRequestFullscreen();
-    } catch (err) {
-      console.error("[fullscreen]", err);
-      toast("تعذّر الدخول لملء الشاشة. جرّب متصفح تاني.", "error");
-    }
+    } catch { toast("تعذّر الدخول لملء الشاشة. جرّب متصفح تاني.", "error"); }
   };
 
   function onFsChange() {
     if (s.submitted) return;
     const isFs = !!document.fullscreenElement || !!document.webkitFullscreenElement;
-
-    if (isFs) {
-      hideFsModal();
-    } else {
+    if (isFs) hideFsModal();
+    else {
       s.fsExitCount++;
       s.anticheatEvents = s.anticheatEvents || [];
       s.anticheatEvents.push({ type: "fullscreen_exit", at: Date.now(), count: s.fsExitCount });
@@ -4886,7 +5685,6 @@ function startFullscreenGuard() {
         performSubmit("auto", "fullscreen_exits");
         return;
       }
-
       showFsModal();
     }
   }
@@ -4899,14 +5697,9 @@ function startFullscreenGuard() {
     document.removeEventListener("webkitfullscreenchange", onFsChange);
   };
 
-  setTimeout(() => {
-    if (!document.fullscreenElement) showFsModal();
-  }, 200);
+  setTimeout(() => { if (!document.fullscreenElement) showFsModal(); }, 200);
 }
 
-/* ============================================================
-   SUBMIT
-   ============================================================ */
 function confirmSubmit() {
   const s = examRuntime;
   if (!s) return;
@@ -4923,8 +5716,7 @@ function confirmSubmit() {
         { label: "إلغاء", class: "btn-ghost" },
         { label: "سلّم على أي حال", class: "btn-outline", onClick: () => actuallySubmit() },
         {
-          label: "روح للسؤال",
-          class: "btn-primary",
+          label: "روح للسؤال", class: "btn-primary",
           onClick: () => {
             if (s.displayMode === "single") showSingleQuestion(firstUnansweredIdx);
             else {
@@ -4973,11 +5765,10 @@ async function performSubmit(kind = "manual", reason = null) {
   if (s.watcherUnsub) { try { s.watcherUnsub(); } catch {} s.watcherUnsub = null; }
   if (s._fsCleanup) { try { s._fsCleanup(); } catch {} }
   if (s._anticheatCleanup) { try { s._anticheatCleanup(); } catch {} }
-  if (s._beforeUnloadHandler) {
-    try { window.removeEventListener("beforeunload", s._beforeUnloadHandler); } catch {}
-  }
+  if (s._beforeUnloadHandler) { try { window.removeEventListener("beforeunload", s._beforeUnloadHandler); } catch {} }
 
   document.body.classList.remove("fs-locked");
+  document.body.classList.remove("screenshot-active");
   try { if (document.fullscreenElement) document.exitFullscreen?.(); } catch {}
 
   try {
@@ -4999,18 +5790,13 @@ async function performSubmit(kind = "manual", reason = null) {
   } catch (err) {
     console.error(err);
     s.submitted = false;
-    const reasonText = !navigator.onLine
-      ? "لا يوجد اتصال بالإنترنت — إجاباتك محفوظة محليًا"
-      : err?.code === "permission-denied"
-      ? "انتهت صلاحية الجلسة — أعد تحميل الصفحة"
+    const reasonText = !navigator.onLine ? "لا يوجد اتصال بالإنترنت — إجاباتك محفوظة محليًا"
+      : err?.code === "permission-denied" ? "انتهت صلاحية الجلسة — أعد تحميل الصفحة"
       : err?.message || "خطأ غير معروف";
     toast(`فشل التسليم: ${reasonText}`, "error", 8000);
   }
 }
 
-/* ============================================================
-   REALTIME WATCHER
-   ============================================================ */
 function startExamRealtimeWatcher(examId, initialUpdatedAtMs) {
   const unsub = onSnapshot(doc(db, "exams", examId), (snap) => {
     if (!snap.exists()) return;
@@ -5067,19 +5853,13 @@ async function applyExamUpdate() {
   $("[data-exam-title]").textContent = newExam.title || "امتحان";
   $("[data-exam-meta]").textContent = `${subjectLabel(newExam.subject)} · ${gradeLabel(newExam.grade)}`;
 
-  if (s.displayMode === "single") {
-    renderSingleNavList();
-    showSingleQuestion(s.index);
-  } else {
-    renderScrollMode();
-  }
+  if (s.displayMode === "single") { renderSingleNavList(); showSingleQuestion(s.index); }
+  else renderScrollMode();
   updateProgress();
 
   try {
     await updateDoc(doc(db, "attempts", s.attempt.id), {
-      answers: s.answers,
-      questionOrder: s.orderedIds,
-      updatedAt: serverTimestamp()
+      answers: s.answers, questionOrder: s.orderedIds, updatedAt: serverTimestamp()
     });
   } catch {}
   s.dirty = false;
@@ -5093,13 +5873,11 @@ async function renderResult() {
   const loading = $("[data-result-loading]");
   const main = $("[data-result-main]");
 
-  loading.hidden = false;
-  main.hidden = true;
+  loading.hidden = false; main.hidden = true;
 
   const user = auth.currentUser;
   if (!user) {
-    loading.hidden = true;
-    main.hidden = false;
+    loading.hidden = true; main.hidden = false;
     $("[data-result-exam-title]").textContent = "سجّل دخول لعرض النتيجة";
     return;
   }
@@ -5130,18 +5908,15 @@ async function renderResult() {
     if (!attempt) throw new Error("no attempt");
     exam = await getExam(attempt.examId);
     if (!exam) throw new Error("no exam");
-  } catch (err) {
-    loading.hidden = true;
-    main.hidden = false;
+  } catch {
+    loading.hidden = true; main.hidden = false;
     $("[data-result-exam-title]").textContent = "لا يوجد امتحان";
     $("[data-score-block]").hidden = true;
     $("[data-waiting-block]").hidden = true;
     return;
   }
 
-  loading.hidden = true;
-  main.hidden = false;
-
+  loading.hidden = true; main.hidden = false;
   await renderResultContent(attempt, exam);
 }
 
@@ -5187,9 +5962,7 @@ async function renderResultContent(attempt, exam) {
     const key = answersMap[q.id] || {};
     const autoSc = Number(perQ[q.id] || 0);
     const manSc = Number((attempt.manualScores || {})[q.id] || 0);
-    const got = (attempt.manualScores && attempt.manualScores[q.id] != null)
-      ? manSc
-      : autoSc;
+    const got = (attempt.manualScores && attempt.manualScores[q.id] != null) ? manSc : autoSc;
     const max = Number(q.score) || 1;
 
     let cls = "is-partial";
@@ -5204,10 +5977,11 @@ async function renderResultContent(attempt, exam) {
     head.appendChild(num);
     head.appendChild(el("span", { class: `review-score ${cls}`, text: `${got} / ${max}` }));
     card.appendChild(head);
+
+    if (q.header) card.appendChild(el("div", { class: "q-header-text", text: q.header }));
     card.appendChild(el("div", { class: "review-question", text: q.text || "" }));
 
     const wrap = el("div", { class: "review-answers" });
-
     const isUnanswered = !isAnswered(a, q);
 
     let studentText = "—";
@@ -5218,11 +5992,8 @@ async function renderResultContent(attempt, exam) {
       studentCls = "is-unanswered";
     } else {
       if (q.type === "mcq" || q.type === "mcq_just") {
-        if (a.selectedIndex != null && q.options?.[a.selectedIndex]) {
-          studentText = q.options[a.selectedIndex];
-        } else if (a.selectedIndex != null) {
-          studentText = `الخيار ${String.fromCharCode(65 + a.selectedIndex)}`;
-        }
+        if (a.selectedIndex != null && q.options?.[a.selectedIndex]) studentText = q.options[a.selectedIndex];
+        else if (a.selectedIndex != null) studentText = `الخيار ${String.fromCharCode(65 + a.selectedIndex)}`;
       } else if (q.type === "tf" || q.type === "tf_just") {
         if (a.boolValue === true) studentText = "صح";
         else if (a.boolValue === false) studentText = "خطأ";
@@ -5270,6 +6041,13 @@ async function renderResultContent(attempt, exam) {
       ]));
     }
 
+    if (q.explanation) {
+      wrap.appendChild(el("div", { class: "review-explanation" }, [
+        el("strong", { text: "الشرح" }),
+        el("div", { text: q.explanation, style: "white-space:pre-wrap" })
+      ]));
+    }
+
     card.appendChild(wrap);
     reviewHost.appendChild(card);
   });
@@ -5286,84 +6064,70 @@ async function deleteAccountFlow() {
 
   showGlobalLoading("جارٍ التحقق من هويتك…");
   let reauthUser = null;
-  try {
-    reauthUser = await signInWithGoogle();
-  } catch (err) {
-    hideGlobalLoading();
-    toast("تم إلغاء العملية", "warning");
-    return;
-  }
+  try { reauthUser = await signInWithGoogle(); }
+  catch { hideGlobalLoading(); toast("تم إلغاء العملية", "warning"); return; }
   hideGlobalLoading();
 
   if (!reauthUser || reauthUser.uid !== currentUser.uid) {
-    toast("يجب تسجيل الدخول بنفس الحساب", "error");
-    return;
+    toast("يجب تسجيل الدخول بنفس الحساب", "error"); return;
   }
 
   const step2 = await showDeleteStep2();
   if (!step2) return;
 
   showGlobalLoading("جارٍ حذف الحساب…");
-
   try {
-    const uid = currentUser.uid;
+    const uidV = currentUser.uid;
     const normalized = currentProfile.normalizedUsername;
+    const publicId = currentProfile.publicId;
 
-    const examsSnap = await getDocs(query(collection(db, "exams"), where("ownerId", "==", uid)));
+    const examsSnap = await getDocs(query(collection(db, "exams"), where("ownerId", "==", uidV)));
     const examIds = examsSnap.docs.map((d) => d.id);
 
     for (const examId of examIds) {
       try {
         const attemptsSnap = await getDocs(query(collection(db, "attempts"), where("examId", "==", examId)));
         for (const aDoc of attemptsSnap.docs) {
-          try { await deleteDoc(doc(db, "attempts", aDoc.id)); } catch (e) { console.warn(e); }
+          try { await deleteDoc(doc(db, "attempts", aDoc.id)); } catch {}
         }
-      } catch (e) { console.warn(e); }
+      } catch {}
     }
 
     for (const examId of examIds) {
-      try { await deleteDoc(doc(db, "examAnswers", examId)); } catch (e) { console.warn(e); }
+      try { await deleteDoc(doc(db, "examAnswers", examId)); } catch {}
     }
 
     for (const examId of examIds) {
-      try { await deleteDoc(doc(db, "exams", examId)); } catch (e) { console.warn(e); }
+      try { await deleteDoc(doc(db, "exams", examId)); } catch {}
     }
 
     try {
-      const logsSnap = await getDocs(query(collection(db, "activityLogs"), where("ownerId", "==", uid)));
-      for (const lDoc of logsSnap.docs) {
-        try { await deleteDoc(doc(db, "activityLogs", lDoc.id)); } catch (e) { console.warn(e); }
-      }
-    } catch (e) { console.warn(e); }
+      const txSnap = await getDocs(query(collection(db, "creditTransactions"), where("uid", "==", uidV)));
+      for (const tDoc of txSnap.docs) { try { await deleteDoc(doc(db, "creditTransactions", tDoc.id)); } catch {} }
+    } catch {}
 
-    if (normalized) {
-      try { await deleteDoc(doc(db, "usernames", normalized)); } catch (e) { console.warn(e); }
-    }
+    try { await deleteDoc(doc(db, "userCredits", uidV)); } catch {}
 
-    try { await deleteDoc(doc(db, "users", uid)); } catch (e) { console.warn(e); }
+    if (publicId) { try { await deleteDoc(doc(db, "publicIds", String(publicId))); } catch {} }
+    if (normalized) { try { await deleteDoc(doc(db, "usernames", normalized)); } catch {} }
+    try { await deleteDoc(doc(db, "users", uidV)); } catch {}
 
     clearProfileCache();
+    stopCreditsListener();
 
     try {
       if (currentUser && currentUser.delete) await currentUser.delete();
       else await fbSignOut(auth);
-    } catch (err) {
-      console.warn("auth delete failed:", err);
-      try { await fbSignOut(auth); } catch {}
-    }
+    } catch { try { await fbSignOut(auth); } catch {} }
 
-    currentUser = null;
-    currentProfile = null;
+    currentUser = null; currentProfile = null; currentCredits = null;
+    isUserAdmin = false;
     hideGlobalLoading();
 
     openModal({
       title: "تم حذف الحساب",
       body: "تم حذف حسابك وجميع بياناتك بنجاح.",
-      actions: [{
-        label: "الرئيسية",
-        class: "btn-primary",
-        onClick: () => { navigate("/"); }
-      }]
+      actions: [{ label: "الرئيسية", class: "btn-primary", onClick: () => navigate("/") }]
     });
   } catch (err) {
     console.error("[deleteAccount]", err);
@@ -5384,7 +6148,8 @@ function showDeleteStep1() {
             el("li", { text: "جميع امتحاناتك" }),
             el("li", { text: "جميع محاولات الطلاب" }),
             el("li", { text: "جميع الإجابات والنتائج" }),
-            el("li", { text: "ملفك الشخصي واسم المستخدم" })
+            el("li", { text: "رصيد الكريدت وسجل المعاملات" }),
+            el("li", { text: "ملفك الشخصي واسم المستخدم والـ ID" })
           ])
         ]),
         el("p", { class: "text-sm text-muted mt-3", text: "سيُطلب منك تسجيل الدخول مرة أخرى لتأكيد هويتك." })
@@ -5426,9 +6191,13 @@ onRoute("/app/builder", async (p) => { await renderBuilder(p); });
 onRoute("/app/exam", async (p) => { await renderExamDetails(p); });
 onRoute("/app/grading", async (p) => { await renderGrading(p); });
 onRoute("/app/bank", () => {});
+onRoute("/app/ai-qeyas", () => {});
 onRoute("/app/profile", () => { renderProfile(); });
 onRoute("/app/settings", () => { renderSettings(); });
-onRoute("/app/support", () => { renderSupport(); });
+onRoute("/app/credits", async () => { await renderCreditsPage(); });
+onRoute("/app/subscription", () => { renderSubscriptionPage(); });
+onRoute("/app/checkout", () => { renderCheckoutPage(); });
+onRoute("/app/admin", async () => { await renderAdminPage(); });
 onRoute("/exam", async (p) => { await renderExam(p); });
 onRoute("/result", async () => { await renderResult(); });
 
@@ -5441,23 +6210,27 @@ document.addEventListener("click", (e) => {
   if (e.target.closest("[data-create-exam]")) { navigate("/app/builder"); return; }
   if (e.target.closest("[data-delete-account]")) { deleteAccountFlow(); return; }
   if (e.target.closest("[data-back]")) { history.back(); return; }
+  if (e.target.closest("[data-side-credit]")) { navigate("/app/credits"); return; }
+  if (e.target.closest("[data-credit-badge]")) { navigate("/app/credits"); return; }
+
+  const copyIdBtn = e.target.closest("[data-copy-id]");
+  if (copyIdBtn) {
+    const pid = currentProfile?.publicId;
+    if (pid) { navigator.clipboard.writeText(String(pid)); toast("تم نسخ الـ ID", "success"); }
+    return;
+  }
 
   const refreshBtn = e.target.closest("[data-refresh-page]");
   if (refreshBtn) {
     if (refreshBtn.disabled) return;
-
     refreshBtn.disabled = true;
     refreshBtn.classList.add("is-loading");
-
     const span = refreshBtn.querySelector("span");
     const originalText = span?.textContent || "تحديث";
-
     let countdown = 5;
-
     const tick = () => {
       if (span) span.textContent = `تحديث (${countdown})`;
       countdown--;
-
       if (countdown < 0) {
         refreshBtn.disabled = false;
         refreshBtn.classList.remove("is-loading");
@@ -5466,13 +6239,8 @@ document.addEventListener("click", (e) => {
       }
       setTimeout(tick, 1000);
     };
-
     tick();
-
-    setTimeout(() => {
-      location.reload();
-    }, 300);
-
+    setTimeout(() => location.reload(), 300);
     return;
   }
 
@@ -5522,9 +6290,7 @@ window.addEventListener("offline", () => {
   const wasLoggedIn = localStorage.getItem(PROFILE_CACHE_KEY);
   const goingToApp = hash.includes("/app/") && !wasLoggedIn;
 
-  if (goingToApp) {
-    showGlobalLoading("جارٍ التحميل…");
-  }
+  if (goingToApp) showGlobalLoading("جارٍ التحميل…");
 
   handleRoute();
 })();
