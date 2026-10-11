@@ -64,6 +64,8 @@ const UPLOAD = {
 const SUPPORT_PHONE = "01016212814";
 const SUPPORT_WHATSAPP = "201016212814";
 
+const CREDIT_COIN_IMG = "https://i.ibb.co/gZq3dgTz/file-000000009804820a9c2e8456f982f039.png";
+
 const CREDIT_PACKS = {
   free:    { id: "free",    name: "Free",    credits: 10,   priceEGP: 0,    badge: null,              order: 1, description: "للتجربة" },
   plus:    { id: "plus",    name: "Plus",    credits: 500,  priceEGP: 200,  badge: "الأكثر اختيارًا", order: 2, description: "للمعلم المتوسط" },
@@ -157,28 +159,15 @@ function svgIcon(id, size = 18) {
   return svg;
 }
 
-function creditCoinSVG(size = 20, gradientId = "coinGradApp") {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 64 64");
-  svg.setAttribute("width", size);
-  svg.setAttribute("height", size);
-  svg.setAttribute("aria-hidden", "true");
-  svg.innerHTML = `
-    <circle cx="32" cy="32" r="30" fill="url(#${gradientId})" stroke="#b8860b" stroke-width="1.5"/>
-    <circle cx="32" cy="32" r="26" fill="url(#${gradientId}Inner)" opacity="0.85"/>
-    <text x="32" y="42" text-anchor="middle" font-family="Inter,sans-serif" font-size="28" font-weight="900" fill="#7a4f00">Q</text>
-    <defs>
-      <radialGradient id="${gradientId}" cx="35%" cy="30%" r="70%">
-        <stop offset="0%" stop-color="#fff3b0"/>
-        <stop offset="45%" stop-color="#f5c542"/>
-        <stop offset="100%" stop-color="#c98a00"/>
-      </radialGradient>
-      <radialGradient id="${gradientId}Inner" cx="35%" cy="30%" r="70%">
-        <stop offset="0%" stop-color="#fff9d6"/>
-        <stop offset="100%" stop-color="#e0a800"/>
-      </radialGradient>
-    </defs>`;
-  return svg;
+function creditCoinImg(size = 22) {
+  const img = document.createElement("img");
+  img.src = CREDIT_COIN_IMG;
+  img.alt = "";
+  img.className = "credit-coin-img";
+  img.setAttribute("draggable", "false");
+  img.style.width = size + "px";
+  img.style.height = size + "px";
+  return img;
 }
 
 function debounce(fn, wait) {
@@ -957,7 +946,6 @@ async function getAuthToken() {
   return await auth.currentUser.getIdToken();
 }
 
-/* ---------- AI QUEUE ---------- */
 const AI_QUEUE_DOC_PATH = ["_meta", "aiRateLimit"];
 
 async function readAISlots() {
@@ -1027,7 +1015,6 @@ async function waitForAISlot(onTick) {
   return false;
 }
 
-/* ---------- BATCH GRADING ---------- */
 async function aiGradeBatch(payload) {
   const token = await getAuthToken();
   const res = await fetch("/api/ai/qeyas-grade", {
@@ -2908,49 +2895,101 @@ function renderStudentsTab(host, exam, attempts) {
   }
 
   const toolbar = el("div", { class: "row-between", style: "margin-bottom:var(--sp-3);gap:var(--sp-3);flex-wrap:wrap" });
-  const pendingCount = attempts.filter((a) => a.status === "submitted" && !a.gradedAt).length;
+
+  const pendingCount = attempts.filter((a) => a.status === "submitted").length;
+  const allGraded = attempts.length > 0 && attempts.every((a) => a.gradedAt);
+  const isPublished = !!exam.resultPublishedAt;
+  const hasEssays = getAllExamQuestions(exam).some(isEssay);
 
   const infoEl = el("div", { class: "text-sm text-muted" });
-  infoEl.textContent = pendingCount ? `فيه ${pendingCount} ورقة بانتظار التصحيح` : "كل الأوراق مصححة";
+  if (isPublished) infoEl.textContent = "النتائج منشورة للطلاب";
+  else if (allGraded) infoEl.textContent = "كل الأوراق مصححة — جاهزة للنشر";
+  else if (pendingCount > 0) infoEl.textContent = `فيه ${pendingCount} ورقة بانتظار التصحيح`;
+  else infoEl.textContent = "";
   toolbar.appendChild(infoEl);
 
   const actionsWrap = el("div", { class: "row", style: "gap:var(--sp-2)" });
 
-  const autoGradeBtn = el("button", {
-    type: "button", class: "btn btn-outline btn-sm",
+  /* ===== زر 1: تصحيح الكل (اختيار / صح-خطأ / أكمل) ===== */
+  const gradeAllBtn = el("button", {
+    type: "button",
+    class: "btn btn-outline btn-sm",
     disabled: pendingCount === 0
   });
-  autoGradeBtn.appendChild(svgIcon("check", 14));
-  autoGradeBtn.appendChild(document.createTextNode(" تصحيح تلقائي للموضوعي"));
-  autoGradeBtn.addEventListener("click", async () => {
+  gradeAllBtn.appendChild(svgIcon("check", 14));
+  gradeAllBtn.appendChild(document.createTextNode(" تصحيح الكل"));
+  gradeAllBtn.title = "تصحيح الأسئلة الموضوعية (اختيار / صح-خطأ / أكمل)";
+  gradeAllBtn.addEventListener("click", async () => {
     if (pendingCount === 0) return;
-    autoGradeBtn.classList.add("is-loading");
+    gradeAllBtn.classList.add("is-loading");
     try {
       const result = await autoGradeAttempts(exam.id, exam);
-      if (result.noAnswerKey) { toast("مفيش إجابات نموذجية محفوظة — احفظ إجابات الأسئلة أولاً", "error", 6000); return; }
-      if (result.alreadyDone) { toast("كل الأوراق مصححة بالفعل", "info"); return; }
-      if (result.graded > 0 && result.pendingManual === 0) toast(`تم تصحيح ${result.graded} ورقة`, "success");
-      else if (result.graded > 0 && result.pendingManual > 0) toast(`تم تصحيح ${result.graded} ورقة، و${result.pendingManual} ورقة فيها مقالات محتاجة تصحيح`, "warning", 7000);
-      else if (result.pendingManual > 0) toast(`كل الأوراق (${result.pendingManual}) فيها مقالات — استخدم AI Qeyas`, "info", 7000);
+      if (result.noAnswerKey) {
+        toast("مفيش إجابات نموذجية محفوظة — احفظ إجابات الأسئلة أولاً", "error", 6000);
+        return;
+      }
+      if (result.alreadyDone) {
+        toast("كل الأوراق مصححة بالفعل", "info");
+        return;
+      }
+      if (result.graded > 0 && result.pendingManual === 0) {
+        toast(`تم تصحيح ${result.graded} ورقة`, "success");
+      } else if (result.graded > 0 && result.pendingManual > 0) {
+        toast(`تم تصحيح ${result.graded} ورقة، و${result.pendingManual} ورقة فيها مقالات محتاجة AI`, "warning", 7000);
+      } else if (result.pendingManual > 0) {
+        toast(`كل الأوراق فيها مقالات — استخدم "تصحيح الكل بالـ AI"`, "info", 7000);
+      }
       renderExamDetails(currentParams);
     } catch (err) {
       console.error(err);
       toast("فشل التصحيح", "error");
-    } finally { autoGradeBtn.classList.remove("is-loading"); }
+    } finally {
+      gradeAllBtn.classList.remove("is-loading");
+    }
   });
-  actionsWrap.appendChild(autoGradeBtn);
+  actionsWrap.appendChild(gradeAllBtn);
 
-  const hasEssays = getAllExamQuestions(exam).some(isEssay);
+  /* ===== زر 2: تصحيح الكل بالـ AI ===== */
   if (hasEssays) {
     const aiGradeBtn = el("button", {
-      type: "button", class: "btn btn-gold btn-sm",
+      type: "button",
+      class: "btn btn-gold btn-sm",
       disabled: pendingCount === 0
     });
     aiGradeBtn.appendChild(svgIcon("sparkles", 14));
-    aiGradeBtn.appendChild(document.createTextNode(" تصحيح الكل بـ AI Qeyas"));
+    aiGradeBtn.appendChild(document.createTextNode(" تصحيح الكل بالـ AI"));
+    aiGradeBtn.title = "تصحيح المقالي بالـ AI — الأسئلة الموضوعية تُصحح تلقائيًا بدون كريدت";
     aiGradeBtn.addEventListener("click", () => runAIGradeAll(exam, attempts));
     actionsWrap.appendChild(aiGradeBtn);
   }
+
+  /* ===== زر 3: نشر للكل ===== */
+  const publishAllBtn = el("button", {
+    type: "button",
+    class: "btn btn-success btn-sm",
+    disabled: !allGraded || isPublished
+  });
+  publishAllBtn.appendChild(svgIcon("award", 14));
+  publishAllBtn.appendChild(document.createTextNode(" نشر للكل"));
+  publishAllBtn.title = isPublished ? "النتائج منشورة بالفعل" : (!allGraded ? "لازم تصحح كل الأوراق الأول" : "نشر النتائج للطلاب");
+  publishAllBtn.addEventListener("click", async () => {
+    if (!allGraded || isPublished) return;
+    publishAllBtn.classList.add("is-loading");
+    try {
+      await updateDoc(doc(db, "exams", exam.id), {
+        resultPublishedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      toast("تم نشر النتائج للطلاب", "success");
+      renderExamDetails(currentParams);
+    } catch (err) {
+      console.error(err);
+      toast("فشل النشر", "error");
+    } finally {
+      publishAllBtn.classList.remove("is-loading");
+    }
+  });
+  actionsWrap.appendChild(publishAllBtn);
 
   toolbar.appendChild(actionsWrap);
   host.appendChild(toolbar);
@@ -3159,12 +3198,22 @@ async function runAIGradeAll(exam, attempts) {
     return;
   }
 
-  const submittedAttempts = attempts.filter(
-    (a) => (a.status === "submitted" || a.status === "graded") && !a.gradedAt
+  /* ===== الخطوة 1: تصحيح تلقائي للموضوعي (ببلاش) ===== */
+  try {
+    await autoGradeAttempts(exam.id, exam);
+  } catch (err) {
+    console.warn("[ai] auto-grade pre-step failed:", err);
+  }
+
+  /* ===== الخطوة 2: نعيد قراءة المحاولات ===== */
+  const freshAttempts = await listAttempts(exam.id);
+  const submittedAttempts = freshAttempts.filter(
+    (a) => a.status === "submitted" && !a.gradedAt
   );
 
   if (!submittedAttempts.length) {
-    toast("مفيش أوراق بانتظار التصحيح", "info");
+    toast("كل الأوراق مصححة بالفعل", "info");
+    renderExamDetails(currentParams);
     return;
   }
 
@@ -3200,7 +3249,7 @@ async function runAIGradeAll(exam, attempts) {
   const costBox = el("div", { class: "ai-confirm-cost" });
   costBox.appendChild(el("span", { class: "ai-confirm-cost-label", text: "التكلفة المتوقعة" }));
   const costVal = el("span", { class: "ai-confirm-cost-value" });
-  costVal.appendChild(creditCoinSVG(28, "coinInModal"));
+  costVal.appendChild(creditCoinImg(28));
   costVal.appendChild(document.createTextNode(" " + cost));
   costBox.appendChild(costVal);
   body.appendChild(costBox);
@@ -3209,7 +3258,8 @@ async function runAIGradeAll(exam, attempts) {
   [
     ["إجمالي الإجابات المقالية", String(totalEssays)],
     ["رصيدك الحالي", String(currentBalance)],
-    ["الرصيد بعد العملية", String(afterBalance)]
+    ["الرصيد بعد العملية", String(afterBalance)],
+    ["الموضوعي (اختيار/صح-خطأ/أكمل)", "تم تصحيحه تلقائيًا ✓"]
   ].forEach(([k, v]) => {
     breakdown.appendChild(el("div", { class: "row-between" }, [
       el("span", { text: k }), el("span", { text: v })
@@ -3229,7 +3279,7 @@ async function runAIGradeAll(exam, attempts) {
     body.appendChild(errBox);
   } else {
     body.appendChild(el("p", { class: "text-sm text-muted" },
-      [document.createTextNode("AI هيقترح درجات لكل إجابة. إنت تراجعها قبل الاعتماد.")]));
+      [document.createTextNode("AI هيقترح درجات لكل إجابة مقالية. إنت تراجعها قبل الاعتماد.")]));
   }
 
   const actions = [{ label: "إلغاء", class: "btn-ghost" }];
@@ -3250,7 +3300,7 @@ async function runAIGradeAll(exam, attempts) {
     });
   }
 
-  openModal({ title: "تصحيح الكل بـ AI Qeyas", body, className: "ai-confirm-modal", actions });
+  openModal({ title: "تصحيح الكل بالـ AI", body, className: "ai-confirm-modal", actions });
 }
 
 async function actuallyRunAIGradeAll(exam, attempts, essayQuestions, cost) {
