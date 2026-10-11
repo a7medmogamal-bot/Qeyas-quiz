@@ -64,8 +64,6 @@ const UPLOAD = {
 const SUPPORT_PHONE = "01016212814";
 const SUPPORT_WHATSAPP = "201016212814";
 
-const ADMIN_EMAIL = "a7med.mo.gamal@gmail.com";
-
 const CREDIT_PACKS = {
   free:    { id: "free",    name: "Free",    credits: 10,   priceEGP: 0,    badge: null,              order: 1, description: "للتجربة" },
   plus:    { id: "plus",    name: "Plus",    credits: 500,  priceEGP: 200,  badge: "الأكثر اختيارًا", order: 2, description: "للمعلم المتوسط" },
@@ -286,9 +284,6 @@ function fromLocalInput(v) {
 }
 
 function isEssay(q) { return q.type === "essay" || q.type === "mcq_just" || q.type === "tf_just"; }
-function isAdminEmail(email) {
-  return String(email || "").toLowerCase().trim() === ADMIN_EMAIL;
-}
 
 /* ============================================================
    GLOBAL LOADING
@@ -658,7 +653,6 @@ let currentProfile = null;
 let currentStudentProfile = null;
 let currentCredits = null;
 let creditsUnsub = null;
-let isUserAdmin = false;
 
 const PROFILE_CACHE_KEY = "qeyasquiz.profile.cache";
 const STUDENT_CACHE_KEY = "qeyasquiz.student.profile";
@@ -715,7 +709,6 @@ async function signInWithGoogle() {
 async function signOutUser() {
   try { await fbSignOut(auth); } catch {}
   currentUser = null; currentProfile = null; currentStudentProfile = null; currentCredits = null;
-  isUserAdmin = false;
   if (creditsUnsub) { try { creditsUnsub(); } catch {} creditsUnsub = null; }
   clearProfileCache(); clearStudentCache();
   try {
@@ -974,9 +967,7 @@ async function readAISlots() {
     if (!snap.exists()) return { activeUids: [] };
     const data = snap.data();
     return { activeUids: Array.isArray(data.activeUids) ? data.activeUids : [] };
-  } catch {
-    return { activeUids: [] };
-  }
+  } catch { return { activeUids: [] }; }
 }
 
 async function claimAISlot() {
@@ -993,16 +984,12 @@ async function claimAISlot() {
         throw new Error("QUEUE_FULL");
       }
 
-      tx.set(ref, {
-        activeUids: [...active, uidV],
-        updatedAt: serverTimestamp()
-      }, { merge: true });
+      tx.set(ref, { activeUids: [...active, uidV], updatedAt: serverTimestamp() }, { merge: true });
     });
     return true;
   } catch (err) {
     if (err.message === "QUEUE_FULL") return false;
     console.warn("[ai queue] claim failed:", err);
-    // لو القواعد منعت، نرجع true عشان نسمح بالتنفيذ (fallback)
     return true;
   }
 }
@@ -1176,7 +1163,6 @@ const ROUTES = {
   "/app/credits": { page: "app", view: "credits" },
   "/app/subscription": { page: "app", view: "subscription" },
   "/app/checkout": { page: "app", view: "checkout" },
-  "/app/admin": { page: "app", view: "admin" },
   "/exam": { page: "exam" },
   "/result": { page: "result" }
 };
@@ -1225,8 +1211,7 @@ function handleRoute() {
       settings: "الإعدادات",
       credits: "الرصيد والباقات",
       subscription: "الباقات",
-      checkout: "الدفع",
-      admin: "لوحة الأدمن"
+      checkout: "الدفع"
     };
     const titleEl = $("[data-page-title]");
     if (titleEl) titleEl.textContent = titleMap[route.view] || "";
@@ -1271,7 +1256,6 @@ onAuthStateChanged(auth, async (user) => {
 
   if (!user) {
     currentProfile = null; currentStudentProfile = null; currentCredits = null;
-    isUserAdmin = false;
     stopCreditsListener();
     clearProfileCache(); clearStudentCache();
     authResolved = true;
@@ -1284,12 +1268,6 @@ onAuthStateChanged(auth, async (user) => {
     }
     return;
   }
-
-  // فحص الأدمن بالإيميل
-  isUserAdmin = isAdminEmail(user.email);
-  document.querySelectorAll("[data-admin-only]").forEach((node) => {
-    node.hidden = !isUserAdmin;
-  });
 
   const cachedTeacher = getCachedProfile();
   const cachedStudent = getCachedStudentProfile();
@@ -3171,7 +3149,7 @@ function getAllExamQuestions(exam) {
 }
 
 /* ============================================================
-   AI QEYAS — BATCH GRADING FLOW (with queue + countdown)
+   AI QEYAS — BATCH GRADING FLOW
    ============================================================ */
 async function runAIGradeAll(exam, attempts) {
   const allQuestions = getAllExamQuestions(exam);
@@ -3192,7 +3170,6 @@ async function runAIGradeAll(exam, attempts) {
 
   const totalEssays = essayQuestions.length * submittedAttempts.length;
 
-  // الحد الأقصى حسب التوكنز
   if (totalEssays > AI_CONSTANTS.MAX_ESSAYS_PER_REQUEST) {
     openModal({
       title: "العدد كبير أوي",
@@ -3200,7 +3177,7 @@ async function runAIGradeAll(exam, attempts) {
         el("p", { class: "text-secondary" }, [
           document.createTextNode(`الامتحان فيه ${totalEssays} إجابة مقالية، والحد الأقصى للطلب الواحد ${AI_CONSTANTS.MAX_ESSAYS_PER_REQUEST} إجابة.`)
         ]),
-        el("p", { class: "text-sm text-muted", text: "قلل عدد الطلاب في الطلب الواحد، أو استخدم تصحيح تلقائي للموضوعي أولاً." })
+        el("p", { class: "text-sm text-muted", text: "قلل عدد الطلاب في الطلب الواحد." })
       ]),
       actions: [{ label: "تمام", class: "btn-primary" }]
     });
@@ -3211,7 +3188,6 @@ async function runAIGradeAll(exam, attempts) {
   const currentBalance = currentCredits?.balance ?? 0;
   const afterBalance = currentBalance - cost;
 
-  // نافذة التأكيد
   const body = el("div", { class: "stack" });
   body.appendChild(el("p", { class: "text-secondary" }, [
     document.createTextNode("AI Qeyas هيصحح ")
@@ -3278,7 +3254,6 @@ async function runAIGradeAll(exam, attempts) {
 }
 
 async function actuallyRunAIGradeAll(exam, attempts, essayQuestions, cost) {
-  // 1) استنى دور في الطابور
   const queueModal = openModal({
     title: "في انتظار دورك…",
     body: buildQueueModalBody(1, 20),
@@ -3310,7 +3285,6 @@ async function actuallyRunAIGradeAll(exam, attempts, essayQuestions, cost) {
       return;
     }
 
-    // 2) احجز مكان في الطابور الفعلي
     const slotClaimed = await claimAISlot();
     if (!slotClaimed) {
       clearInterval(tickTimer);
@@ -3323,7 +3297,6 @@ async function actuallyRunAIGradeAll(exam, attempts, essayQuestions, cost) {
     queueModal.close();
     showGlobalLoading("AI Qeyas بيصحح…");
 
-    // 3) ابعت الطلب
     const submissions = attempts.map((att) => ({
       attemptId: att.id,
       studentName: att.studentName,
@@ -3360,7 +3333,6 @@ async function actuallyRunAIGradeAll(exam, attempts, essayQuestions, cost) {
       estimatedCost: cost
     });
 
-    // 4) احفظ النتائج
     const scores = result.scores || [];
     for (const item of scores) {
       const attemptRef = doc(db, "attempts", item.attemptId);
@@ -3376,7 +3348,6 @@ async function actuallyRunAIGradeAll(exam, attempts, essayQuestions, cost) {
       const manualScores = { ...(existing.manualScores || {}), ...perQScores };
       const autoScore = existing.autoScore || 0;
 
-      // احسب الإجمالي من اليدوي
       let manualTotal = 0;
       Object.values(manualScores).forEach((v) => { manualTotal += Number(v) || 0; });
 
@@ -3481,7 +3452,7 @@ const EVENT_LABELS = {
   shortcut_u:       { label: "اختصار عرض المصدر",       color: "warning" },
   printscreen_blocked: { label: "محاولة PrintScreen",    color: "danger"  },
   offline:          { label: "انقطع الاتصال",          color: "warning" },
-  online:           { label: "عاد الاتصال",           color: "success" },
+  online:           { label: "عاد الاتصال",           color: "success" }
 };
 
 function openAttemptDetails(attempt, exam) {
@@ -4449,216 +4420,6 @@ function renderCheckoutPage() {
   });
 
   host.appendChild(actions);
-}
-
-/* ============================================================
-   ADMIN PAGE
-   ============================================================ */
-async function renderAdminPage() {
-  const host = $("[data-admin-page]");
-  if (!host) return;
-
-  if (!isUserAdmin) {
-    host.innerHTML = "";
-    host.appendChild(el("div", { class: "empty" }, [
-      el("h3", { text: "غير مصرح" }),
-      el("p", { text: "هذه الصفحة للمشرفين فقط." })
-    ]));
-    return;
-  }
-
-  host.innerHTML = "";
-
-  const header = el("div", { style: "margin-bottom:var(--sp-5)" });
-  header.appendChild(el("h1", { style: "font-size:var(--fs-3xl);margin-bottom:var(--sp-2)", text: "لوحة الأدمن" }));
-  header.appendChild(el("p", { class: "text-secondary", text: `مرحبًا ${currentProfile?.fullName || ""}` }));
-  host.appendChild(header);
-
-  // Stats
-  const statsGrid = el("div", { class: "grid grid-4" });
-  const statsData = [
-    { label: "المعلمين", id: "teachers" },
-    { label: "الامتحانات", id: "exams" },
-    { label: "المحاولات", id: "attempts" },
-    { label: "الاشتراكات المنتظرة", id: "pending" }
-  ];
-  statsData.forEach((s) => {
-    const card = el("div", { class: "card", style: "text-align:center" });
-    const val = el("div", { class: "stat-value", text: "—" });
-    val.id = `admin-stat-${s.id}`;
-    card.appendChild(val);
-    card.appendChild(el("div", { class: "card-subtitle", text: s.label }));
-    statsGrid.appendChild(card);
-  });
-  host.appendChild(statsGrid);
-
-  try {
-    const [usersSnap, examsSnap, attemptsSnap, subsSnap] = await Promise.all([
-      getDocs(collection(db, "users")),
-      getDocs(collection(db, "exams")),
-      getDocs(collection(db, "attempts")),
-      getDocs(query(collection(db, "subscriptions"), where("status", "==", "pending")))
-    ]);
-    const setStat = (id, value) => {
-      const e = document.getElementById(`admin-stat-${id}`);
-      if (e) e.textContent = String(value);
-    };
-    setStat("teachers", usersSnap.size);
-    setStat("exams", examsSnap.size);
-    setStat("attempts", attemptsSnap.size);
-    setStat("pending", subsSnap.size);
-  } catch (err) { console.warn("[admin stats]", err); }
-
-  host.appendChild(el("h2", { class: "builder-panel-title mt-6", text: "الاشتراكات المنتظرة" }));
-  const pendingHost = el("div", { class: "stack", id: "admin-pending-subs" });
-  host.appendChild(pendingHost);
-
-  await loadPendingSubscriptions(pendingHost);
-}
-
-async function loadPendingSubscriptions(host) {
-  host.innerHTML = "";
-  try {
-    const snap = await getDocs(query(
-      collection(db, "subscriptions"),
-      where("status", "==", "pending"),
-      orderBy("createdAt", "desc")
-    ));
-    const subs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-
-    if (!subs.length) {
-      host.appendChild(el("div", { class: "empty", style: "padding:var(--sp-6)" }, [
-        el("p", { class: "text-muted", text: "لا يوجد اشتراكات منتظرة حاليًا." })
-      ]));
-      return;
-    }
-
-    subs.forEach((sub) => {
-      const row = el("div", { class: "card" });
-
-      const top = el("div", { class: "row-between mb-3" });
-      const info = el("div", {});
-      info.appendChild(el("div", { class: "fw-bold", text: sub.name || "—" }));
-      info.appendChild(el("div", { class: "text-sm text-muted", text: `ID: ${sub.publicId || "—"} · ${sub.phone || "—"}` }));
-      top.appendChild(info);
-      top.appendChild(el("span", { class: "badge badge-in_progress", text: planLabel(sub.plan) }));
-      row.appendChild(top);
-
-      const details = el("div", { class: "quick-report-item" });
-      details.appendChild(el("span", { class: "quick-report-label", text: "الباقة" }));
-      details.appendChild(el("span", { class: "quick-report-value", text: `${sub.creditsGranted} كريدت` }));
-      details.appendChild(el("span", { class: "quick-report-sub", text: `${sub.priceEGP} جنيه · ${fmtDate(sub.createdAt)}` }));
-      row.appendChild(details);
-
-      const actions = el("div", { class: "row mt-4", style: "gap:var(--sp-2)" });
-
-      const approveBtn = el("button", { type: "button", class: "btn btn-success btn-sm", text: "موافقة وتفعيل" });
-      approveBtn.addEventListener("click", () => approveSubscription(sub, approveBtn));
-      actions.appendChild(approveBtn);
-
-      const rejectBtn = el("button", { type: "button", class: "btn btn-ghost btn-sm", text: "رفض" });
-      rejectBtn.addEventListener("click", () => rejectSubscription(sub, rejectBtn));
-      actions.appendChild(rejectBtn);
-
-      row.appendChild(actions);
-      host.appendChild(row);
-    });
-  } catch (err) {
-    console.error("[admin subs]", err);
-    host.appendChild(el("div", { class: "empty", style: "padding:var(--sp-6)" }, [
-      el("p", { class: "text-muted", text: err.code === "permission-denied" ? "غير مصرح." : "تعذّر التحميل." })
-    ]));
-  }
-}
-
-async function approveSubscription(sub, btn) {
-  btn.classList.add("is-loading");
-  try {
-    const now = new Date();
-    const expiresAt = new Date(now);
-    expiresAt.setDate(expiresAt.getDate() + 30);
-
-    await runTransaction(db, async (tx) => {
-      const subRef = doc(db, "subscriptions", sub.id);
-      tx.update(subRef, {
-        status: "active",
-        approvedBy: currentUser.uid,
-        approvedAt: serverTimestamp(),
-        startedAt: serverTimestamp(),
-        expiresAt: Timestamp.fromDate(expiresAt)
-      });
-
-      const creditRef = doc(db, "userCredits", sub.uid);
-      const creditSnap = await tx.get(creditRef);
-      const currentBalance = creditSnap.exists() ? (creditSnap.data().balance || 0) : 0;
-      const newBalance = currentBalance + sub.creditsGranted;
-
-      if (creditSnap.exists()) {
-        tx.update(creditRef, {
-          balance: newBalance,
-          totalAdded: (creditSnap.data().totalAdded || 0) + sub.creditsGranted,
-          lastTopUpAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        });
-      } else {
-        tx.set(creditRef, {
-          uid: sub.uid,
-          balance: newBalance,
-          totalAdded: sub.creditsGranted,
-          totalSpent: 0,
-          monthlyGranted: sub.creditsGranted,
-          monthlySpent: 0,
-          signupBonusGranted: true,
-          lastTopUpAt: serverTimestamp(),
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        });
-      }
-
-      const txRef = doc(collection(db, "creditTransactions"));
-      tx.set(txRef, {
-        uid: sub.uid, type: "add", amount: sub.creditsGranted,
-        source: "subscription",
-        note: `اشتراك ${planLabel(sub.plan)} — ${sub.priceEGP} جنيه`,
-        balanceAfter: newBalance,
-        createdAt: serverTimestamp()
-      });
-
-      const userRef = doc(db, "users", sub.uid);
-      tx.update(userRef, {
-        subscription: {
-          plan: sub.plan,
-          status: "active",
-          startedAt: serverTimestamp(),
-          expiresAt: Timestamp.fromDate(expiresAt),
-          lastRenewalAt: serverTimestamp()
-        },
-        updatedAt: serverTimestamp()
-      });
-    });
-
-    toast("تم تفعيل الاشتراك", "success");
-    await loadPendingSubscriptions($("#admin-pending-subs"));
-  } catch (err) {
-    console.error("[approve]", err);
-    toast(err.code === "permission-denied" ? "غير مصرح" : "فشل التفعيل", "error");
-  } finally { btn.classList.remove("is-loading"); }
-}
-
-async function rejectSubscription(sub, btn) {
-  btn.classList.add("is-loading");
-  try {
-    await updateDoc(doc(db, "subscriptions", sub.id), {
-      status: "rejected",
-      approvedBy: currentUser.uid,
-      approvedAt: serverTimestamp()
-    });
-    toast("تم الرفض", "info");
-    await loadPendingSubscriptions($("#admin-pending-subs"));
-  } catch (err) {
-    console.error("[reject]", err);
-    toast(err.code === "permission-denied" ? "غير مصرح" : "فشل الرفض", "error");
-  } finally { btn.classList.remove("is-loading"); }
 }
 
 /* ============================================================
@@ -6121,7 +5882,6 @@ async function deleteAccountFlow() {
     } catch { try { await fbSignOut(auth); } catch {} }
 
     currentUser = null; currentProfile = null; currentCredits = null;
-    isUserAdmin = false;
     hideGlobalLoading();
 
     openModal({
@@ -6197,7 +5957,6 @@ onRoute("/app/settings", () => { renderSettings(); });
 onRoute("/app/credits", async () => { await renderCreditsPage(); });
 onRoute("/app/subscription", () => { renderSubscriptionPage(); });
 onRoute("/app/checkout", () => { renderCheckoutPage(); });
-onRoute("/app/admin", async () => { await renderAdminPage(); });
 onRoute("/exam", async (p) => { await renderExam(p); });
 onRoute("/result", async () => { await renderResult(); });
 
