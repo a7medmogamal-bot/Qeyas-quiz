@@ -4,6 +4,8 @@
    Never exposes the AI provider to the client
    ============================================================ */
 
+import crypto from "crypto";
+
 /* ============================================================
    CONFIG
    ============================================================ */
@@ -64,42 +66,120 @@ function safeNumber(v, fallback = 0) {
 }
 
 /* ============================================================
-   AUTH — Verify Firebase ID token via Firestore REST
-   (no Admin SDK required)
+   GOOGLE PUBLIC CERTIFICATES
+   للتحقق المحلي من Firebase ID Token بدون Firestore
+   ============================================================ */
+const GOOGLE_CERTS_URL =
+  "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com";
+
+let cachedCerts = null;
+let cachedCertsExpiry = 0;
+
+async function getGooglePublicKeys() {
+  const now = Date.now();
+  if (cachedCerts && now < cachedCertsExpiry) return cachedCerts;
+
+  const res = await fetch(GOOGLE_CERTS_URL);
+  if (!res.ok) throw new Error("GOOGLE_CERTS_FETCH_FAILED");
+
+  const cacheControl = res.headers.get("cache-control") || "";
+  const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
+  const maxAge = maxAgeMatch ? parseInt(maxAgeMatch[1], 10) * 1000 : 3600000;
+
+  cachedCerts = await res.json();
+  cachedCertsExpiry = now + maxAge;
+  return cachedCerts;
+}
+
+function base64UrlDecode(str) {
+  let base64 = String(str || "").replace(/-/g, "+").replace(/_/g, "/");
+  while (base64.length % 4) base64 += "=";
+  return Buffer.from(base64, "base64").toString("utf-8");
+}
+
+/* ============================================================
+   AUTH — Verify Firebase ID Token locally (no Firestore)
    ============================================================ */
 async function verifyIdToken(idToken, projectId) {
-  if (!idToken || typeof idToken !== "string") return null;
-
-  // نطلب وثيقة تتطلب مصادقة → نجاح = توكن صالح
-  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/_meta/authenticated`;
-
-  let res;
-  try {
-    res = await fetch(url, {
-      headers: { "Authorization": `Bearer ${idToken}` }
-    });
-  } catch (err) {
-    console.warn("[auth] network error:", err.message);
+  if (!idToken || typeof idToken !== "string") {
+    console.warn("[auth] missing token");
     return null;
   }
 
-  // 200 = الوثيقة موجودة، 404 = الوثيقة مش موجودة بس التوكن صالح
-  if (res.status === 200 || res.status === 404) {
-    // استخرج uid من التوكن (JWT payload)
-    try {
-      const payload = JSON.parse(
-        Buffer.from(idToken.split(".")[1], "base64").toString("utf-8")
-      );
-      return {
-        uid: payload.user_id || payload.sub,
-        email: payload.email || null
-      };
-    } catch {
-      return { uid: null, email: null };
-    }
+  const parts = idToken.split(".");
+  if (parts.length !== 3) {
+    console.warn("[auth] invalid token structure (parts !== 3)");
+    return null;
   }
 
-  return null;
+  let header, payload;
+  try {
+    header = JSON.parse(base64UrlDecode(parts[0]));
+    payload = JSON.parse(base64UrlDecode(parts[1]));
+  } catch (err) {
+    console.warn("[auth] decode failed:", err.message);
+    return null;
+  }
+
+  // 1) تحقق من الـ audience
+  if (payload.aud !== projectId) {
+    console.warn("[auth] audience mismatch:", payload.aud, "!=", projectId);
+    return null;
+  }
+
+  // 2) تحقق من الـ issuer
+  if (payload.iss !== `https://securetoken.google.com/${projectId}`) {
+    console.warn("[auth] issuer mismatch:", payload.iss);
+    return null;
+  }
+
+  // 3) تحقق من انتهاء التوكن
+  if (typeof payload.exp === "number" && payload.exp * 1000 < Date.now()) {
+    console.warn("[auth] token expired at", new Date(payload.exp * 1000).toISOString());
+    return null;
+  }
+
+  // 4) تحقق من التوقيع باستخدام مفتاح Google العام
+  let certs;
+  try {
+    certs = await getGooglePublicKeys();
+  } catch (err) {
+    console.error("[auth] failed to fetch Google certs:", err.message);
+    return null;
+  }
+
+  const cert = certs[header.kid];
+  if (!cert) {
+    console.warn("[auth] no cert for kid:", header.kid);
+    return null;
+  }
+
+  const signingInput = parts[0] + "." + parts[1];
+  const signature = parts[2];
+  const sigBuf = Buffer.from(
+    String(signature).replace(/-/g, "+").replace(/_/g, "/"),
+    "base64"
+  );
+
+  let isValid = false;
+  try {
+    const verifier = crypto.createVerify("RSA-SHA256");
+    verifier.update(signingInput);
+    isValid = verifier.verify(cert, sigBuf);
+  } catch (err) {
+    console.warn("[auth] signature verify error:", err.message);
+    return null;
+  }
+
+  if (!isValid) {
+    console.warn("[auth] signature invalid");
+    return null;
+  }
+
+  return {
+    uid: payload.user_id || payload.sub || null,
+    email: payload.email || null
+  };
 }
 
 /* ============================================================
@@ -287,13 +367,11 @@ function validateInput(body) {
   const totalEssays = questions.length * submissions.length;
   if (totalEssays > MAX_ESSAYS_PER_REQUEST) return "too_many_essays";
 
-  // تأكد إن كل سؤال عنده بيانات كافية
   for (const q of questions) {
     if (!q.id || !q.text) return "invalid_question_data";
     if (!Number.isFinite(Number(q.score)) || Number(q.score) <= 0) return "invalid_question_score";
   }
 
-  // تأكد إن كل submission عنده answers
   for (const s of submissions) {
     if (!s.attemptId || !Array.isArray(s.answers)) return "invalid_submission_data";
   }
@@ -315,7 +393,10 @@ export default async function handler(req, res) {
   const PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
 
   if (!AI_KEY || !PROJECT_ID) {
-    console.error("[ai] missing env vars");
+    console.error("[ai] missing env vars:", {
+      hasAIKey: !!AI_KEY,
+      hasProjectId: !!PROJECT_ID
+    });
     return res.status(500).json({ error: "server_config_error" });
   }
 
@@ -330,11 +411,13 @@ export default async function handler(req, res) {
   const idToken = authHeader.replace(/^Bearer\s+/i, "").trim();
 
   if (!idToken) {
+    console.warn("[ai] no authorization header");
     return res.status(401).json({ error: "unauthorized" });
   }
 
   const user = await verifyIdToken(idToken, PROJECT_ID);
   if (!user || !user.uid) {
+    console.warn("[ai] token verification failed");
     return res.status(401).json({ error: "unauthorized" });
   }
 
@@ -511,8 +594,6 @@ export default async function handler(req, res) {
 
   if (!deductionOk) {
     console.warn("[credits] deduction failed for", user.uid);
-    // مانرجعش خطأ للمستخدم لأن التصحيح تم فعلاً
-    // نسجلها كملاحظة في الاستجابة
   }
 
   /* -------- Log transaction -------- */
