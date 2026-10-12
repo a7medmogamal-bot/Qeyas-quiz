@@ -1,5 +1,6 @@
 /* ============================================================
    QeyasQuiz — Application Logic (Arabic)
+   Version: 2.0 — Role-based system (Teacher / Student)
    ============================================================ */
 
 /* ============================================================
@@ -20,7 +21,7 @@ async function loadConfig() {
     document.body.innerHTML = `
       <div style="padding:40px;text-align:center;font-family:'IBM Plex Sans Arabic',sans-serif;direction:rtl">
         <h1 style="margin-bottom:16px">خطأ في إعداد التطبيق</h1>
-        <p style="color:#666">تعذّر تحميل الإعدادات. يرجى تحديث الصفحة، وإذا استمر الخطأ تواصل مع الدعم.</p>
+        <p style="color:#666">تعذّر تحميل الإعدادات. يرجى تحديث الصفحة.</p>
       </div>`;
     throw err;
   }
@@ -32,13 +33,15 @@ async function loadConfig() {
    ============================================================ */
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
-  getAuth, GoogleAuthProvider, signInWithPopup, signOut as fbSignOut,
-  onAuthStateChanged, setPersistence, browserLocalPersistence
+  getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
+  signOut as fbSignOut, onAuthStateChanged, setPersistence,
+  browserLocalPersistence, updateProfile, sendPasswordResetEmail,
+  EmailAuthProvider, reauthenticateWithCredential, deleteUser
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc,
   collection, addDoc, query, where, orderBy, limit, getDocs,
-  serverTimestamp, runTransaction, Timestamp, onSnapshot
+  serverTimestamp, runTransaction, Timestamp, onSnapshot, writeBatch
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 /* ============================================================
@@ -54,6 +57,7 @@ setPersistence(auth, browserLocalPersistence).catch(() => {});
 
 const UPLOAD = {
   cloudName: cfg.upload.cloudName,
+  preset: "qeyasquiz_unsigned",
   avatarFolder: "qeyasquiz/avatars",
   questionFolder: "qeyasquiz/questions"
 };
@@ -64,7 +68,7 @@ const UPLOAD = {
 const SUPPORT_PHONE = "01016212814";
 const SUPPORT_WHATSAPP = "201016212814";
 
-const CREDIT_COIN_IMG = "https://i.ibb.co/gZq3dgTz/file-000000009804820a9c2e8456f982f039.png";
+const CREDIT_COIN_IMG = "https://i.ibb.co/WpcGCWFD/file-000000009804820a9c2e8456e982f039-removebg-preview.png";
 
 const CREDIT_PACKS = {
   free:    { id: "free",    name: "Free",    credits: 10,   priceEGP: 0,    badge: null,              order: 1, description: "للتجربة" },
@@ -80,9 +84,17 @@ const AI_CONSTANTS = {
   QUEUE_MAX_WAIT_SEC: 300
 };
 
-/* ============================================================
-   SUBJECTS + GRADES
-   ============================================================ */
+const LEAVE_CONFIG = {
+  TOTAL_CHANCES: 3,
+  GRACE_SECONDS: 5
+};
+
+const SYSTEM_LIMITS = {
+  MAX_TEACHERS_PER_STUDENT: 100,
+  STUDENT_REQUEST_COOLDOWN_DAYS: 7,
+  ROOM_CODE_LENGTH: 12
+};
+
 const SUBJECTS = [
   { id: "studies",     ar: "دراسات" },
   { id: "arabic",      ar: "عربي" },
@@ -107,27 +119,35 @@ const GRADE_LABELS = {
   sec1: "الأول الثانوي", sec2: "الثاني الثانوي", sec3: "الثالث الثانوي"
 };
 
+const GOVERNORATES = [
+  "القاهرة", "الجيزة", "الإسكندرية", "الدقهلية", "الشرقية", "القليوبية",
+  "كفر الشيخ", "الغربية", "المنوفية", "البحيرة", "الإسماعيلية", "بورسعيد",
+  "السويس", "شمال سيناء", "جنوب سيناء", "الفيوم", "بني سويف", "المنيا",
+  "أسيوط", "سوهاج", "قنا", "الأقصر", "أسوان", "البحر الأحمر", "الوادي الجديد",
+  "مطروح", "دمياط"
+];
+
 function subjectLabel(id) {
-  if (!id) return "—";
+  if (!id) return "-";
   if (String(id).startsWith("custom:")) return String(id).slice(7);
   const s = SUBJECTS.find((x) => x.id === id);
   return s ? s.ar : id;
 }
 
-function gradeLabel(id) { return GRADE_LABELS[id] || id || "—"; }
+function gradeLabel(id) { return GRADE_LABELS[id] || id || "-"; }
 
 function statusLabel(s) {
   return {
     draft: "مسودة", scheduled: "مجدول", active: "نشط", completed: "مكتمل", paused: "متوقف",
     submitted: "تم التسليم", graded: "تم التصحيح", in_progress: "قيد الحل",
-    pending: "بانتظار الموافقة", active_sub: "نشط", expired: "منتهي", rejected: "مرفوض"
+    pending: "بانتظار الموافقة", approved: "مقبول", rejected: "مرفوض", expired: "منتهي"
   }[s] || s;
 }
 
 function planLabel(p) { return CREDIT_PACKS[p]?.name || "Free"; }
 
 /* ============================================================
-   UTILS
+   UTILITIES
    ============================================================ */
 const $ = (sel, ctx = document) => ctx.querySelector(sel);
 const $$ = (sel, ctx = document) => Array.from(ctx.querySelectorAll(sel));
@@ -187,6 +207,21 @@ function uid(len = 12) {
   return s;
 }
 
+function generateRoomCode() {
+  const raw = uid(SYSTEM_LIMITS.ROOM_CODE_LENGTH);
+  return raw;
+}
+
+function formatRoomCode(code) {
+  if (!code) return "";
+  const clean = String(code).replace(/[^A-Z0-9]/gi, "").toUpperCase();
+  return clean.match(/.{1,4}/g)?.join("-") || clean;
+}
+
+function normalizeRoomCode(input) {
+  return String(input || "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
+}
+
 function generateResultCode() {
   const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
   const arr = new Uint32Array(8);
@@ -215,32 +250,21 @@ async function generateUniquePublicId(maxTries = 5) {
   throw new Error("PUBLIC_ID_GENERATION_FAILED");
 }
 
-async function ensureUserHasPublicId(uidValue) {
-  const userRef = doc(db, "users", uidValue);
-  const snap = await getDoc(userRef);
-  if (!snap.exists()) return null;
-
-  const data = snap.data();
-  if (data.publicId) return data.publicId;
-
+async function assignPublicId(uidValue, role) {
   const newId = await generateUniquePublicId();
-
   await runTransaction(db, async (tx) => {
     const publicIdRef = doc(db, "publicIds", String(newId));
     const existing = await tx.get(publicIdRef);
     if (existing.exists()) throw new Error("PUBLIC_ID_COLLISION");
-
-    tx.set(publicIdRef, { uid: uidValue, createdAt: serverTimestamp() });
-    tx.update(userRef, { publicId: newId, publicIdAssignedAt: serverTimestamp() });
+    tx.set(publicIdRef, { uid: uidValue, role, createdAt: serverTimestamp() });
   });
-
   return newId;
 }
 
 function fmtDate(ts) {
-  if (!ts) return "—";
+  if (!ts) return "-";
   const d = ts.toDate ? ts.toDate() : new Date(ts);
-  if (isNaN(d.getTime())) return "—";
+  if (isNaN(d.getTime())) return "-";
   return d.toLocaleString("ar-EG", {
     year: "numeric", month: "long", day: "numeric",
     hour: "2-digit", minute: "2-digit"
@@ -256,6 +280,7 @@ function fmtDateShort(ts) {
 
 function normalizeUsername(u) { return String(u || "").trim().toLowerCase(); }
 function validUsername(u) { return /^[a-zA-Z0-9_]{3,24}$/.test(u); }
+function validPhone(p) { return /^01[0-9]{9}$/.test(String(p || "").trim()); }
 
 function toLocalInput(ts) {
   if (!ts) return "";
@@ -274,10 +299,31 @@ function fromLocalInput(v) {
 
 function isEssay(q) { return q.type === "essay" || q.type === "mcq_just" || q.type === "tf_just"; }
 
+function colorFromString(str) {
+  const palette = [
+    "#3f68f5", "#2a9d8f", "#e76f51", "#9d4edd", "#f4a261",
+    "#457b9d", "#e63946", "#2a6f97", "#bc6c25", "#6a4c93",
+    "#06a77d", "#c9184a", "#1d7874", "#7209b7", "#d4a373"
+  ];
+  let hash = 0;
+  for (let i = 0; i < String(str).length; i++) {
+    hash = String(str).charCodeAt(i) + ((hash << 5) - hash);
+    hash = hash & hash;
+  }
+  return palette[Math.abs(hash) % palette.length];
+}
+
+function getInitials(name) {
+  const clean = String(name || "").trim();
+  if (!clean) return "?";
+  const first = clean.split(/\s+/)[0];
+  return first.charAt(0).toUpperCase();
+}
+
 /* ============================================================
    GLOBAL LOADING
    ============================================================ */
-function showGlobalLoading(text = "جارٍ التحميل…") {
+function showGlobalLoading(text = "جارٍ التحميل...") {
   let overlay = document.getElementById("globalLoading");
   if (!overlay) {
     overlay = document.createElement("div");
@@ -341,7 +387,6 @@ function initThreeBackground() {
   const particleCount = window.innerWidth < 768 ? 180 : 400;
   const positions = new Float32Array(particleCount * 3);
   const velocities = new Float32Array(particleCount * 3);
-  const sizes = new Float32Array(particleCount);
 
   for (let i = 0; i < particleCount; i++) {
     positions[i * 3] = (Math.random() - 0.5) * 30;
@@ -350,12 +395,10 @@ function initThreeBackground() {
     velocities[i * 3] = (Math.random() - 0.5) * 0.008;
     velocities[i * 3 + 1] = (Math.random() - 0.5) * 0.008;
     velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.008;
-    sizes[i] = 0.04 + Math.random() * 0.08;
   }
 
   const particleGeom = new THREE.BufferGeometry();
   particleGeom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  particleGeom.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
 
   const particleMat = new THREE.PointsMaterial({
     color: isDark ? accentColor : brandColor,
@@ -389,20 +432,6 @@ function initThreeBackground() {
   const knot = new THREE.Mesh(knotGeom, knotMat);
   knot.position.set(0, 0, -2);
   scene.add(knot);
-
-  const icoGeom = new THREE.IcosahedronGeometry(0.7, 1);
-  const icoMat = new THREE.MeshBasicMaterial({
-    color: isDark ? 0x6a8dff : 0x2a4cd6,
-    wireframe: true, transparent: true, opacity: isDark ? 0.2 : 0.12
-  });
-  const ico = new THREE.Mesh(icoGeom, icoMat);
-  ico.position.set(-5, 3, -3);
-  scene.add(ico);
-
-  const ico2 = new THREE.Mesh(icoGeom, icoMat.clone());
-  ico2.position.set(5, -3, -4);
-  ico2.scale.setScalar(1.4);
-  scene.add(ico2);
 
   let mouseX = 0, mouseY = 0;
   window.addEventListener("mousemove", (e) => {
@@ -454,18 +483,9 @@ function initThreeBackground() {
 
     knot.rotation.x = time * 0.15;
     knot.rotation.y = time * 0.2;
-    ico.rotation.x = time * 0.25;
-    ico.rotation.y = time * 0.3;
-    ico2.rotation.x = -time * 0.2;
-    ico2.rotation.y = -time * 0.25;
 
     particles.rotation.y += (mouseX * 0.15 - particles.rotation.y) * 0.02;
     particles.rotation.x += (mouseY * 0.1 - particles.rotation.x) * 0.02;
-    knot.rotation.z = mouseX * 0.3;
-    ico.position.x = -5 + mouseX * 0.5;
-    ico.position.y = 3 + mouseY * 0.4;
-    ico2.position.x = 5 - mouseX * 0.4;
-    ico2.position.y = -3 - mouseY * 0.3;
 
     renderer.render(scene, camera);
   }
@@ -487,28 +507,11 @@ function initThreeBackground() {
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  const themeObserver = new MutationObserver(() => {
-    const dark = document.documentElement.dataset.theme === "dark";
-    particleMat.color.setHex(dark ? accentColor : brandColor);
-    particleMat.opacity = dark ? 0.55 : 0.4;
-    lineMat.color.setHex(dark ? accentColor : brandColor);
-    lineMat.opacity = dark ? 0.12 : 0.08;
-    knotMat.color.setHex(dark ? accentColor : brandColor);
-    knotMat.opacity = dark ? 0.14 : 0.08;
-    icoMat.color.setHex(dark ? 0x6a8dff : 0x2a4cd6);
-    icoMat.opacity = dark ? 0.2 : 0.12;
-    ico2.material.color.setHex(dark ? 0x6a8dff : 0x2a4cd6);
-    ico2.material.opacity = dark ? 0.2 : 0.12;
-  });
-  themeObserver.observe(document.documentElement, {
-    attributes: true, attributeFilter: ["data-theme"]
-  });
-
   animate();
 }
 
 /* ============================================================
-   ANTI-COPY GLOBAL
+   ANTI-COPY
    ============================================================ */
 function initAntiCopy() {
   document.addEventListener("contextmenu", (e) => {
@@ -632,23 +635,50 @@ function openModal({ title, body, actions = [], className = "", onClose }) {
 }
 
 /* ============================================================
+   CREDIT POPUP
+   ============================================================ */
+function showCreditPopup(amount, title = "تمت إضافة رصيد") {
+  const modal = $("[data-credit-popup]");
+  if (!modal) return;
+
+  const titleEl = $("[data-credit-popup-title]");
+  const amountEl = $("[data-credit-popup-amount]");
+  const textEl = $("[data-credit-popup-text]");
+  const closeBtn = $("[data-credit-popup-close]");
+
+  if (titleEl) titleEl.textContent = title;
+  if (amountEl) amountEl.textContent = (amount >= 0 ? "+" : "") + amount;
+  if (textEl) textEl.textContent = amount >= 0
+    ? "تمت إضافة الكريدت لحسابك بنجاح"
+    : "تم خصم الكريدت من حسابك";
+
+  modal.hidden = false;
+
+  const close = () => { modal.hidden = true; };
+  if (closeBtn) closeBtn.onclick = close;
+  modal.onclick = (e) => { if (e.target === modal) close(); };
+}
+
+/* ============================================================
    FIREBASE HELPERS
    ============================================================ */
-const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({ prompt: "select_account" });
-
 let currentUser = null;
-let currentProfile = null;
-let currentStudentProfile = null;
+let currentProfile = null;        // Teacher profile
+let currentStudentProfile = null; // Student profile
 let currentCredits = null;
+let currentRole = null;           // "teacher" | "student"
 let creditsUnsub = null;
 
 const PROFILE_CACHE_KEY = "qeyasquiz.profile.cache";
 const STUDENT_CACHE_KEY = "qeyasquiz.student.profile";
+const ROLE_CACHE_KEY = "qeyasquiz.role";
 
-function cacheProfile(profile) {
+function cacheProfile(profile, role) {
   if (!profile) return;
-  try { localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({ ...profile, _cachedAt: Date.now() })); } catch {}
+  try {
+    localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({ ...profile, _role: role, _cachedAt: Date.now() }));
+    localStorage.setItem(ROLE_CACHE_KEY, role);
+  } catch {}
 }
 
 function getCachedProfile() {
@@ -663,82 +693,70 @@ function getCachedProfile() {
   } catch { return null; }
 }
 
-function clearProfileCache() { try { localStorage.removeItem(PROFILE_CACHE_KEY); } catch {} }
-
-function cacheStudentProfile(profile) {
-  if (!profile) return;
-  try { localStorage.setItem(STUDENT_CACHE_KEY, JSON.stringify({ ...profile, _cachedAt: Date.now() })); } catch {}
-}
-
-function getCachedStudentProfile() {
+function clearProfileCache() {
   try {
-    const raw = localStorage.getItem(STUDENT_CACHE_KEY);
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    if (data._cachedAt && Date.now() - data._cachedAt > 7 * 24 * 60 * 60 * 1000) {
-      localStorage.removeItem(STUDENT_CACHE_KEY); return null;
-    }
-    return data;
-  } catch { return null; }
-}
-
-function clearStudentCache() { try { localStorage.removeItem(STUDENT_CACHE_KEY); } catch {} }
-
-async function signInWithGoogle() {
-  try {
-    return (await signInWithPopup(auth, googleProvider)).user;
-  } catch (err) {
-    if (err.code === "auth/popup-closed-by-user" || err.code === "auth/cancelled-popup-request") {
-      throw new Error("تم إلغاء تسجيل الدخول.");
-    }
-    throw new Error("تعذّر تسجيل الدخول. حاول مرة أخرى.");
-  }
+    localStorage.removeItem(PROFILE_CACHE_KEY);
+    localStorage.removeItem(STUDENT_CACHE_KEY);
+    localStorage.removeItem(ROLE_CACHE_KEY);
+  } catch {}
 }
 
 async function signOutUser() {
   try { await fbSignOut(auth); } catch {}
-  currentUser = null; currentProfile = null; currentStudentProfile = null; currentCredits = null;
+  currentUser = null;
+  currentProfile = null;
+  currentStudentProfile = null;
+  currentCredits = null;
+  currentRole = null;
   if (creditsUnsub) { try { creditsUnsub(); } catch {} creditsUnsub = null; }
-  clearProfileCache(); clearStudentCache();
+  clearProfileCache();
   try {
     sessionStorage.removeItem("qeyasquiz.lastAttempt");
     localStorage.removeItem("qeyasquiz.lastAttempt");
-    localStorage.removeItem("qeyasquiz.studentName");
   } catch {}
   navigate("/login");
 }
 
-async function loadProfile(uid) {
+/* ============================================================
+   TEACHER PROFILE
+   ============================================================ */
+async function loadTeacherProfile(uid) {
   try {
     const snap = await getDoc(doc(db, "users", uid));
     return snap.exists() ? { uid, ...snap.data() } : null;
   } catch { return null; }
 }
 
-async function loadStudentProfile(uid) {
-  try {
-    const snap = await getDoc(doc(db, "students", uid));
-    return snap.exists() ? { uid, ...snap.data() } : null;
-  } catch { return null; }
-}
-
-async function saveStudentProfile(uid, fullName) {
-  const studentRef = doc(db, "students", uid);
-  const user = auth.currentUser;
-  const payload = {
+async function createTeacherProfile(uid, data) {
+  const publicId = await assignPublicId(uid, "teacher");
+  const profile = {
     uid,
-    fullName: fullName.trim(),
-    email: user?.email || "",
-    photoURL: user?.photoURL || "",
-    role: "student",
+    role: "teacher",
+    phone: data.phone,
+    email: data.email,
+    username: data.username,
+    normalizedUsername: normalizeUsername(data.username),
+    fullName: data.fullName,
+    governorate: data.governorate,
+    photoURL: data.photoURL || "",
+    publicId,
+    subjects: [],
+    subscription: { plan: "free", expiresAt: null },
+    stats: { totalStudents: 0, totalExams: 0 },
+    createdAt: serverTimestamp(),
     updatedAt: serverTimestamp()
   };
-  const snap = await getDoc(studentRef);
-  if (snap.exists()) await updateDoc(studentRef, payload);
-  else { payload.createdAt = serverTimestamp(); await setDoc(studentRef, payload); }
-  const profile = { uid, fullName: fullName.trim(), email: user?.email || "", role: "student" };
-  cacheStudentProfile(profile);
-  return profile;
+
+  await runTransaction(db, async (tx) => {
+    const unameRef = doc(db, "usernames", profile.normalizedUsername);
+    const unameSnap = await tx.get(unameRef);
+    if (unameSnap.exists()) throw new Error("USERNAME_TAKEN");
+
+    tx.set(unameRef, { uid, createdAt: serverTimestamp() });
+    tx.set(doc(db, "users", uid), profile);
+  });
+
+  return { uid, ...profile, createdAt: new Date(), updatedAt: new Date() };
 }
 
 async function checkUsernameAvailability(username) {
@@ -746,76 +764,36 @@ async function checkUsernameAvailability(username) {
   return !snap.exists();
 }
 
-async function claimUsername(uid, username, profileData) {
-  const normalized = normalizeUsername(username);
-  const userRef = doc(db, "users", uid);
-  const unameRef = doc(db, "usernames", normalized);
-  await runTransaction(db, async (tx) => {
-    const unameSnap = await tx.get(unameRef);
-    if (unameSnap.exists() && unameSnap.data().uid !== uid) throw new Error("USERNAME_TAKEN");
-    tx.set(unameRef, { uid, createdAt: serverTimestamp() });
-    tx.set(userRef, {
-      uid, username,
-      normalizedUsername: normalized,
-      fullName: profileData.fullName,
-      photoURL: profileData.photoURL || "",
-      subjects: profileData.subjects || [],
-      mainSubject: profileData.subjects?.[0] || "",
-      role: "teacher",
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
-    }, { merge: true });
-  });
-}
-
-async function listExams(uid, limitN = 100) {
+/* ============================================================
+   STUDENT PROFILE
+   ============================================================ */
+async function loadStudentProfile(uid) {
   try {
-    const snap = await getDocs(query(
-      collection(db, "exams"),
-      where("ownerId", "==", uid),
-      orderBy("updatedAt", "desc"),
-      limit(limitN)
-    ));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  } catch {
-    try {
-      const snap = await getDocs(query(collection(db, "exams"), where("ownerId", "==", uid)));
-      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    } catch { return []; }
-  }
-}
-
-async function getExam(id) {
-  try {
-    const snap = await getDoc(doc(db, "exams", id));
-    return snap.exists() ? { id, ...snap.data() } : null;
+    const snap = await getDoc(doc(db, "students", uid));
+    return snap.exists() ? { uid, ...snap.data() } : null;
   } catch { return null; }
 }
 
-async function getExamAnswers(examId) {
-  try {
-    const snap = await getDoc(doc(db, "examAnswers", examId));
-    return snap.exists() ? snap.data().answers || {} : {};
-  } catch { return {}; }
-}
+async function createStudentProfile(uid, data) {
+  const publicId = await assignPublicId(uid, "student");
+  const profile = {
+    uid,
+    role: "student",
+    fullName: data.fullName,
+    phone: data.phone,
+    parentPhone: data.parentPhone,
+    motherPhone: data.motherPhone,
+    governorate: data.governorate,
+    email: data.email,
+    publicId,
+    avatarColor: colorFromString(uid),
+    stats: { totalTeachers: 0, totalExams: 0 },
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp()
+  };
 
-async function listAttempts(examId) {
-  try {
-    const snap = await getDocs(query(collection(db, "attempts"), where("examId", "==", examId)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  } catch { return []; }
-}
-
-async function getStudentAttempt(examId, studentUid) {
-  try {
-    const snap = await getDocs(query(
-      collection(db, "attempts"),
-      where("examId", "==", examId),
-      where("studentUid", "==", studentUid),
-      limit(1)
-    ));
-    return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
-  } catch { return null; }
+  await setDoc(doc(db, "students", uid), profile);
+  return { uid, ...profile, createdAt: new Date(), updatedAt: new Date() };
 }
 
 /* ============================================================
@@ -839,15 +817,17 @@ async function loadCredits(uid) {
 async function ensureSignupBonus(uid) {
   const creditRef = doc(db, "userCredits", uid);
   const snap = await getDoc(creditRef);
-  if (snap.exists() && snap.data().signupBonusGranted) return;
+  if (snap.exists() && snap.data().signupBonusGranted) return false;
 
   const bonus = CREDIT_PACKS.free.credits;
+  let granted = false;
 
   await runTransaction(db, async (tx) => {
     const current = await tx.get(creditRef);
     if (current.exists() && current.data().signupBonusGranted) return;
 
     const currentBalance = current.exists() ? (current.data().balance || 0) : 0;
+    granted = true;
 
     tx.set(creditRef, {
       uid,
@@ -870,12 +850,20 @@ async function ensureSignupBonus(uid) {
       createdAt: serverTimestamp()
     });
   });
+
+  return granted;
 }
 
 function startCreditsListener(uid) {
   if (creditsUnsub) { try { creditsUnsub(); } catch {} creditsUnsub = null; }
   creditsUnsub = onSnapshot(doc(db, "userCredits", uid), (snap) => {
+    const prev = currentCredits?.balance ?? 0;
     currentCredits = snap.exists() ? { uid, ...snap.data() } : defaultCredits(uid);
+    const next = currentCredits.balance ?? 0;
+    if (next > prev && prev >= 0) {
+      const diff = next - prev;
+      if (diff > 0) showCreditPopup(diff);
+    }
     updateCreditsUI();
   }, (err) => console.warn("[credits listener]", err));
 }
@@ -939,177 +927,372 @@ async function loadTransactions(uid, limitN = 50) {
 }
 
 /* ============================================================
-   AI QEYAS — CORE
+   TEACHER STUDENTS RELATIONS
    ============================================================ */
-async function getAuthToken() {
-  if (!auth.currentUser) throw new Error("NOT_AUTHED");
-  return await auth.currentUser.getIdToken();
-}
+async function sendStudentRequest(studentUid, teacherUid) {
+  // Check cooldown
+  const existingSnap = await getDocs(query(
+    collection(db, "studentRequests"),
+    where("studentUid", "==", studentUid),
+    where("teacherUid", "==", teacherUid),
+    orderBy("createdAt", "desc"),
+    limit(1)
+  ));
 
-const AI_QUEUE_DOC_PATH = ["_meta", "aiRateLimit"];
-
-async function readAISlots() {
-  try {
-    const ref = doc(db, AI_QUEUE_DOC_PATH[0], AI_QUEUE_DOC_PATH[1]);
-    const snap = await getDoc(ref);
-    if (!snap.exists()) return { activeUids: [] };
-    const data = snap.data();
-    return { activeUids: Array.isArray(data.activeUids) ? data.activeUids : [] };
-  } catch { return { activeUids: [] }; }
-}
-
-async function claimAISlot() {
-  const uidV = currentUser.uid;
-  const ref = doc(db, AI_QUEUE_DOC_PATH[0], AI_QUEUE_DOC_PATH[1]);
-
-  try {
-    await runTransaction(db, async (tx) => {
-      const snap = await tx.get(ref);
-      const data = snap.exists() ? snap.data() : { activeUids: [] };
-      const active = (data.activeUids || []).filter((id) => id !== uidV);
-
-      if (active.length >= AI_CONSTANTS.MAX_CONCURRENT_AI) {
-        throw new Error("QUEUE_FULL");
+  if (!existingSnap.empty) {
+    const last = existingSnap.docs[0].data();
+    if (last.status === "pending") throw new Error("REQUEST_PENDING");
+    if (last.status === "approved") throw new Error("ALREADY_APPROVED");
+    if (last.status === "rejected" && last.respondedAt) {
+      const dt = last.respondedAt.toDate ? last.respondedAt.toDate() : new Date(last.respondedAt);
+      const days = (Date.now() - dt.getTime()) / (1000 * 60 * 60 * 24);
+      if (days < SYSTEM_LIMITS.STUDENT_REQUEST_COOLDOWN_DAYS) {
+        const remain = Math.ceil(SYSTEM_LIMITS.STUDENT_REQUEST_COOLDOWN_DAYS - days);
+        const err = new Error("COOLDOWN");
+        err.daysRemaining = remain;
+        throw err;
       }
+    }
+  }
 
-      tx.set(ref, { activeUids: [...active, uidV], updatedAt: serverTimestamp() }, { merge: true });
-    });
-    return true;
-  } catch (err) {
-    if (err.message === "QUEUE_FULL") return false;
-    console.warn("[ai queue] claim failed:", err);
-    return true;
+  // Check max teachers
+  const myTeachersSnap = await getDocs(collection(db, "studentTeachers", studentUid, "teachers"));
+  if (myTeachersSnap.size >= SYSTEM_LIMITS.MAX_TEACHERS_PER_STUDENT) {
+    throw new Error("MAX_TEACHERS");
+  }
+
+  const student = currentStudentProfile;
+  const teacherSnap = await getDoc(doc(db, "users", teacherUid));
+  if (!teacherSnap.exists()) throw new Error("TEACHER_NOT_FOUND");
+  const teacher = teacherSnap.data();
+
+  const reqRef = await addDoc(collection(db, "studentRequests"), {
+    studentUid,
+    studentName: student.fullName,
+    studentPublicId: student.publicId,
+    studentPhone: student.phone,
+    studentGovernorate: student.governorate,
+    teacherUid,
+    teacherName: teacher.fullName,
+    teacherUsername: teacher.username,
+    status: "pending",
+    createdAt: serverTimestamp(),
+    respondedAt: null,
+    seenAt: null
+  });
+
+  return reqRef.id;
+}
+
+async function approveStudentRequest(requestId) {
+  const reqRef = doc(db, "studentRequests", requestId);
+  const reqSnap = await getDoc(reqRef);
+  if (!reqSnap.exists()) throw new Error("REQUEST_NOT_FOUND");
+  const req = reqSnap.data();
+  if (req.status !== "pending") throw new Error("REQUEST_ALREADY_HANDLED");
+
+  const batch = writeBatch(db);
+
+  batch.update(reqRef, {
+    status: "approved",
+    respondedAt: serverTimestamp(),
+    seenAt: serverTimestamp()
+  });
+
+  const teacherStudentsRef = doc(db, "teacherStudents", req.teacherUid, "students", req.studentUid);
+  batch.set(teacherStudentsRef, {
+    studentUid: req.studentUid,
+    studentName: req.studentName,
+    studentPublicId: req.studentPublicId,
+    studentPhone: req.studentPhone,
+    studentGovernorate: req.studentGovernorate,
+    joinedAt: serverTimestamp()
+  });
+
+  const studentTeachersRef = doc(db, "studentTeachers", req.studentUid, "teachers", req.teacherUid);
+  batch.set(studentTeachersRef, {
+    teacherUid: req.teacherUid,
+    teacherName: req.teacherName,
+    teacherUsername: req.teacherUsername,
+    joinedAt: serverTimestamp()
+  });
+
+  await batch.commit();
+}
+
+async function rejectStudentRequest(requestId) {
+  const reqRef = doc(db, "studentRequests", requestId);
+  await updateDoc(reqRef, {
+    status: "rejected",
+    respondedAt: serverTimestamp(),
+    seenAt: serverTimestamp()
+  });
+}
+
+async function removeStudentFromTeacher(teacherUid, studentUid) {
+  const batch = writeBatch(db);
+  batch.delete(doc(db, "teacherStudents", teacherUid, "students", studentUid));
+  batch.delete(doc(db, "studentTeachers", studentUid, "teachers", teacherUid));
+  await batch.commit();
+}
+
+async function listMyStudents(teacherUid) {
+  try {
+    const snap = await getDocs(collection(db, "teacherStudents", teacherUid, "students"));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch { return []; }
+}
+
+async function listMyTeachers(studentUid) {
+  try {
+    const snap = await getDocs(collection(db, "studentTeachers", studentUid, "teachers"));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch { return []; }
+}
+
+async function listTeacherRequests(teacherUid, status) {
+  try {
+    const conditions = [where("teacherUid", "==", teacherUid)];
+    if (status) conditions.push(where("status", "==", status));
+    const snap = await getDocs(query(collection(db, "studentRequests"), ...conditions));
+    const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    arr.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+    return arr;
+  } catch { return []; }
+}
+
+/* ============================================================
+   EXAMS
+   ============================================================ */
+async function listExams(teacherUid, limitN = 100) {
+  try {
+    const snap = await getDocs(query(
+      collection(db, "exams"),
+      where("ownerId", "==", teacherUid),
+      orderBy("updatedAt", "desc"),
+      limit(limitN)
+    ));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch {
+    try {
+      const snap = await getDocs(query(collection(db, "exams"), where("ownerId", "==", teacherUid)));
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    } catch { return []; }
   }
 }
 
-async function releaseAISlot() {
-  const uidV = currentUser.uid;
-  const ref = doc(db, AI_QUEUE_DOC_PATH[0], AI_QUEUE_DOC_PATH[1]);
+async function getExam(id) {
   try {
-    await runTransaction(db, async (tx) => {
-      const snap = await tx.get(ref);
-      if (!snap.exists()) return;
-      const data = snap.data();
-      const active = (data.activeUids || []).filter((id) => id !== uidV);
-      tx.set(ref, { activeUids: active, updatedAt: serverTimestamp() }, { merge: true });
-    });
-  } catch (err) { console.warn("[ai queue] release failed:", err); }
+    const snap = await getDoc(doc(db, "exams", id));
+    return snap.exists() ? { id, ...snap.data() } : null;
+  } catch { return null; }
 }
 
-async function waitForAISlot(onTick) {
-  const start = Date.now();
-  while (Date.now() - start < AI_CONSTANTS.QUEUE_MAX_WAIT_SEC * 1000) {
-    const slots = await readAISlots();
-    const active = (slots.activeUids || []).filter((id) => id !== currentUser?.uid);
-    const position = active.length + 1;
-    const waitSec = Math.max(AI_CONSTANTS.QUEUE_POLL_INTERVAL / 1000, position * 20);
+async function getExamAnswers(examId) {
+  try {
+    const snap = await getDoc(doc(db, "examAnswers", examId));
+    return snap.exists() ? snap.data().answers || {} : {};
+  } catch { return {}; }
+}
 
-    if (onTick) onTick({ position, waitSec });
+async function listAttempts(examId) {
+  try {
+    const snap = await getDocs(query(collection(db, "attempts"), where("examId", "==", examId)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch { return []; }
+}
 
-    if (active.length < AI_CONSTANTS.MAX_CONCURRENT_AI) {
-      return true;
+async function getStudentAttempt(examId, studentUid) {
+  try {
+    const snap = await getDocs(query(
+      collection(db, "attempts"),
+      where("examId", "==", examId),
+      where("studentUid", "==", studentUid),
+      limit(1)
+    ));
+    return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+  } catch { return null; }
+}
+
+async function findExamByRoomCode(roomCode) {
+  const clean = normalizeRoomCode(roomCode);
+  if (clean.length !== SYSTEM_LIMITS.ROOM_CODE_LENGTH) return null;
+  try {
+    const snap = await getDoc(doc(db, "examRoomCodes", clean));
+    if (!snap.exists()) return null;
+    const data = snap.data();
+    return { examId: data.examId, teacherUid: data.teacherUid, active: data.active, expiresAt: data.expiresAt };
+  } catch { return null; }
+}
+
+async function listUpcomingExamsForStudent(teachers) {
+  if (!teachers.length) return [];
+  const results = [];
+  for (const t of teachers) {
+    try {
+      const snap = await getDocs(query(
+        collection(db, "exams"),
+        where("ownerId", "==", t.teacherUid),
+        where("status", "in", ["scheduled", "active"])
+      ));
+      snap.docs.forEach((d) => {
+        results.push({
+          id: d.id, ...d.data(),
+          teacherName: t.teacherName,
+          teacherUsername: t.teacherUsername
+        });
+      });
+    } catch {}
+  }
+  return results;
+}
+
+async function listStudentHistory(studentUid) {
+  try {
+    const snap = await getDocs(query(
+      collection(db, "attempts"),
+      where("studentUid", "==", studentUid),
+      orderBy("createdAt", "desc"),
+      limit(100)
+    ));
+    const attempts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const enriched = [];
+    for (const att of attempts) {
+      const exam = await getExam(att.examId);
+      enriched.push({ ...att, exam });
+    }
+    return enriched;
+  } catch {
+    try {
+      const snap = await getDocs(query(collection(db, "attempts"), where("studentUid", "==", studentUid)));
+      const attempts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      attempts.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      const enriched = [];
+      for (const att of attempts.slice(0, 100)) {
+        const exam = await getExam(att.examId);
+        enriched.push({ ...att, exam });
+      }
+      return enriched;
+    } catch { return []; }
+  }
+}
+
+/* ============================================================
+   SEARCH TEACHERS
+   ============================================================ */
+async function searchTeachers(queryStr) {
+  const q = String(queryStr || "").trim();
+  if (!q) return [];
+
+  try {
+    // Search by username
+    const normQ = normalizeUsername(q);
+    if (validUsername(normQ)) {
+      const unameSnap = await getDoc(doc(db, "usernames", normQ));
+      if (unameSnap.exists()) {
+        const teacherSnap = await getDoc(doc(db, "users", unameSnap.data().uid));
+        if (teacherSnap.exists()) return [{ uid: unameSnap.data().uid, ...teacherSnap.data() }];
+      }
     }
 
-    await new Promise((r) => setTimeout(r, AI_CONSTANTS.QUEUE_POLL_INTERVAL));
+    // Search by publicId
+    if (/^\d+$/.test(q)) {
+      const pubSnap = await getDoc(doc(db, "publicIds", q));
+      if (pubSnap.exists() && pubSnap.data().role === "teacher") {
+        const teacherSnap = await getDoc(doc(db, "users", pubSnap.data().uid));
+        if (teacherSnap.exists()) return [{ uid: pubSnap.data().uid, ...teacherSnap.data() }];
+      }
+    }
+
+    // Search by name (exact + partial via all teachers)
+    const allSnap = await getDocs(query(collection(db, "users"), limit(500)));
+    const qLower = q.toLowerCase();
+    const results = [];
+    allSnap.docs.forEach((d) => {
+      const data = d.data();
+      const name = (data.fullName || "").toLowerCase();
+      const uname = (data.username || "").toLowerCase();
+      if (name.includes(qLower) || uname.includes(qLower)) {
+        results.push({ uid: d.id, ...data });
+      }
+    });
+    return results.slice(0, 30);
+  } catch (err) {
+    console.error("[searchTeachers]", err);
+    return [];
   }
-  return false;
-}
-
-async function aiGradeBatch(payload) {
-  const token = await getAuthToken();
-  const res = await fetch("/api/ai/qeyas-grade", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${token}`
-    },
-    body: JSON.stringify(payload)
-  });
-
-  const body = await res.json().catch(() => ({}));
-
-  if (!res.ok) {
-    const code = body?.error || "AI_FAILED";
-    const err = new Error(code);
-    err.code = code;
-    err.status = res.status;
-    err.details = body;
-    throw err;
-  }
-
-  return body;
 }
 
 /* ============================================================
-   EXAM STATUS
+   SHARE EXAM / ROOM CODE
    ============================================================ */
-function computeStatus(exam) {
-  if (!exam) return "draft";
-  if (!exam.publishedAt) return "draft";
-  if (exam.manualStatus === "paused") return "paused";
+function shareRoomCode(exam) {
+  const code = exam.roomCode || "";
+  const formatted = formatRoomCode(code);
+  const body = el("div", { class: "stack" });
 
-  const now = Date.now();
-  const start = exam.startAt?.toMillis ? exam.startAt.toMillis() : null;
-  const end = exam.endAt?.toMillis ? exam.endAt.toMillis() : null;
+  const codeBox = el("div", {
+    class: "card",
+    style: "text-align:center;padding:var(--sp-6);background:var(--bg-subtle)"
+  });
+  codeBox.appendChild(el("div", {
+    class: "text-sm text-muted",
+    style: "margin-bottom:8px",
+    text: "كود الغرفة"
+  }));
+  const codeEl = el("div", {
+    class: "mono",
+    style: "font-size:32px;font-weight:700;letter-spacing:6px;color:var(--brand-500);margin-bottom:16px",
+    text: formatted
+  });
+  codeBox.appendChild(codeEl);
 
-  if (end && now > end) return "completed";
-  if (start && now < start) return "scheduled";
-  return "active";
-}
+  const copyBtn = el("button", {
+    class: "btn btn-outline btn-sm", type: "button"
+  });
+  copyBtn.appendChild(svgIcon("copy", 14));
+  copyBtn.appendChild(document.createTextNode(" نسخ الكود"));
+  copyBtn.addEventListener("click", () => {
+    navigator.clipboard.writeText(code);
+    toast("تم نسخ الكود", "success");
+  });
+  codeBox.appendChild(copyBtn);
+  body.appendChild(codeBox);
 
-function isExamFullyGraded(exam, attempts) {
-  const submitted = attempts.filter((a) => a.status === "submitted" || a.status === "graded");
-  if (!submitted.length) return false;
-  return submitted.every((a) => a.gradedAt != null);
-}
+  body.appendChild(el("p", { class: "text-sm text-muted text-center", text: "شارك هذا الكود مع طلابك للانضمام للامتحان." }));
 
-function shouldShowLeaderboard(exam, attempts) {
-  const status = computeStatus(exam);
-  if (status !== "completed") return false;
-  if (!exam.resultPublishedAt) return false;
-  return isExamFullyGraded(exam, attempts);
+  openModal({
+    title: "كود الغرفة",
+    body,
+    actions: [{ label: "إغلاق", class: "btn-primary" }]
+  });
 }
 
 /* ============================================================
-   SIGNED UPLOAD
+   UPLOAD (Cloudinary unsigned)
    ============================================================ */
-async function getUploadSignature(folder) {
-  const res = await fetch("/api/cloudinary-signature", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ folder })
-  });
-  if (!res.ok) throw new Error("SIGN_FAILED");
-  const data = await res.json().catch(() => ({}));
-  if (!data.signature || !data.apiKey || !data.timestamp) throw new Error("SIGN_INVALID");
-  return data;
-}
-
 async function uploadToCloudinary(file, folder, maxBytes = 2 * 1024 * 1024) {
   if (!file) throw new Error("NO_FILE");
   if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) throw new Error("INVALID_TYPE");
   if (file.size > maxBytes) throw new Error("TOO_LARGE");
   if (!UPLOAD.cloudName) throw new Error("CONFIG_MISSING");
 
-  let sign;
-  try { sign = await getUploadSignature(folder); }
-  catch (err) { console.error("[upload] sign failed:", err); throw new Error("SIGN_FAILED"); }
-
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("api_key", sign.apiKey);
-  formData.append("timestamp", sign.timestamp);
-  formData.append("signature", sign.signature);
-  formData.append("folder", sign.folder);
+  formData.append("upload_preset", UPLOAD.preset);
+  if (folder) formData.append("folder", folder);
 
-  const endpoint = `https://api.cloudinary.com/v1_1/${sign.cloudName}/image/upload`;
+  const endpoint = `https://api.cloudinary.com/v1_1/${UPLOAD.cloudName}/image/upload`;
 
   let res;
-  try { res = await fetch(endpoint, { method: "POST", body: formData, mode: "cors" }); }
+  try { res = await fetch(endpoint, { method: "POST", body: formData }); }
   catch { throw new Error("NETWORK_ERROR"); }
 
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) { console.error("[upload] rejected:", { status: res.status, response: body }); throw new Error("UPLOAD_FAILED"); }
+  if (!res.ok) {
+    console.error("[upload] rejected:", { status: res.status, body });
+    throw new Error("UPLOAD_FAILED");
+  }
   if (!body.secure_url) throw new Error("UPLOAD_INCOMPLETE");
   return body.secure_url;
 }
@@ -1118,38 +1301,46 @@ function uploadErrorMessage(err, maxLabel = "") {
   const msg = err?.message || "";
   const suffix = maxLabel ? ` (${maxLabel})` : "";
   if (msg === "NO_FILE") return "لم يتم اختيار ملف";
-  if (msg === "INVALID_TYPE") return "صيغة الصورة غير مدعومة — JPG أو PNG أو WebP فقط";
+  if (msg === "INVALID_TYPE") return "صيغة الصورة غير مدعومة - JPG أو PNG أو WebP فقط";
   if (msg === "TOO_LARGE") return `حجم الصورة أكبر من الحد المسموح${suffix}`;
-  if (msg === "CONFIG_MISSING") return "الإعدادات غير مكتملة — تواصل مع الدعم";
-  if (msg === "SIGN_FAILED" || msg === "SIGN_INVALID") return "تعذّر تجهيز الرفع — حاول مرة أخرى";
-  if (msg === "NETWORK_ERROR") return "تعذّر الاتصال بالخادم — تحقق من الإنترنت";
-  if (msg === "UPLOAD_INCOMPLETE") return "الرفع لم يكتمل — حاول مرة أخرى";
-  if (msg === "UPLOAD_FAILED") return "فشل رفع الصورة — حاول مرة أخرى";
-  return "تعذّر رفع الصورة — حاول مرة أخرى";
+  if (msg === "CONFIG_MISSING") return "الإعدادات غير مكتملة";
+  if (msg === "NETWORK_ERROR") return "تعذّر الاتصال بالخادم";
+  if (msg === "UPLOAD_INCOMPLETE") return "الرفع لم يكتمل";
+  if (msg === "UPLOAD_FAILED") return "فشل رفع الصورة";
+  return "تعذّر رفع الصورة";
 }
-
-async function uploadAvatar(uid, file) { return uploadToCloudinary(file, `${UPLOAD.avatarFolder}/${uid}`, 2 * 1024 * 1024); }
-async function uploadQuestionImage(examId, file) { return uploadToCloudinary(file, `${UPLOAD.questionFolder}/${examId || "draft"}`, 5 * 1024 * 1024); }
 
 /* ============================================================
    ROUTER
    ============================================================ */
 const ROUTES = {
-  "/": { page: "landing" },
+  "/": { page: "login" },
   "/login": { page: "login" },
-  "/setup": { page: "setup" },
-  "/app/dashboard": { page: "app", view: "dashboard" },
-  "/app/exams": { page: "app", view: "exams" },
-  "/app/builder": { page: "app", view: "builder" },
-  "/app/exam": { page: "app", view: "exam-details" },
-  "/app/grading": { page: "app", view: "grading" },
-  "/app/bank": { page: "app", view: "bank" },
-  "/app/ai-qeyas": { page: "app", view: "ai-qeyas" },
-  "/app/profile": { page: "app", view: "profile" },
-  "/app/settings": { page: "app", view: "settings" },
-  "/app/credits": { page: "app", view: "credits" },
-  "/app/subscription": { page: "app", view: "subscription" },
-  "/app/checkout": { page: "app", view: "checkout" },
+
+  // Teacher
+  "/app/dashboard": { page: "app", view: "dashboard", role: "teacher" },
+  "/app/exams": { page: "app", view: "exams", role: "teacher" },
+  "/app/students": { page: "app", view: "students", role: "teacher" },
+  "/app/builder": { page: "app", view: "builder", role: "teacher" },
+  "/app/exam": { page: "app", view: "exam-details", role: "teacher" },
+  "/app/grading": { page: "app", view: "grading", role: "teacher" },
+  "/app/bank": { page: "app", view: "bank", role: "teacher" },
+  "/app/ai-qeyas": { page: "app", view: "ai-qeyas", role: "teacher" },
+  "/app/profile": { page: "app", view: "profile", role: "teacher" },
+  "/app/settings": { page: "app", view: "settings", role: "teacher" },
+  "/app/credits": { page: "app", view: "credits", role: "teacher" },
+  "/app/subscription": { page: "app", view: "subscription", role: "teacher" },
+  "/app/checkout": { page: "app", view: "checkout", role: "teacher" },
+
+  // Student
+  "/student/dashboard": { page: "student-app", view: "student-dashboard", role: "student" },
+  "/student/teachers": { page: "student-app", view: "student-teachers", role: "student" },
+  "/student/masters": { page: "student-app", view: "student-masters", role: "student" },
+  "/student/history": { page: "student-app", view: "student-history", role: "student" },
+  "/student/join": { page: "student-app", view: "student-join", role: "student" },
+  "/student/profile": { page: "student-app", view: "student-profile", role: "student" },
+
+  // Exam + Result
   "/exam": { page: "exam" },
   "/result": { page: "result" }
 };
@@ -1166,29 +1357,38 @@ function navigate(path) {
 }
 
 function handleRoute() {
-  const rawNext = (location.hash.replace(/^#/, "")) || "/";
-  const [nextPath] = rawNext.split("?");
-  if (examRuntime && examRuntime.watcherUnsub && nextPath !== "/exam") {
-    try { examRuntime.watcherUnsub(); } catch {}
-    examRuntime.watcherUnsub = null;
-  }
-
   const raw = (location.hash.replace(/^#/, "")) || "/";
   const [path, qs] = raw.split("?");
   const params = new URLSearchParams(qs || "");
   currentParams = params;
+
+  // Cleanup exam runtime
+  if (examRuntime && path !== "/exam") {
+    if (examRuntime.timerInterval) clearInterval(examRuntime.timerInterval);
+    if (examRuntime.autosaveInterval) clearInterval(examRuntime.autosaveInterval);
+    if (examRuntime.heartbeatInterval) clearInterval(examRuntime.heartbeatInterval);
+    if (examRuntime.watcherUnsub) { try { examRuntime.watcherUnsub(); } catch {} }
+    if (examRuntime._anticheatCleanup) { try { examRuntime._anticheatCleanup(); } catch {} }
+    if (examRuntime._leaveCleanup) { try { examRuntime._leaveCleanup(); } catch {} }
+    examRuntime = null;
+  }
+
   const route = ROUTES[path] || ROUTES["/"];
   const targetPage = route.page;
 
   $$("[data-page]").forEach((p) => { p.hidden = p.dataset.page !== targetPage; });
 
   if (route.view) {
-    $$("[data-view]").forEach((v) => { v.hidden = v.dataset.view !== route.view; });
-    $$(".side-link").forEach((l) => l.classList.toggle("is-active", l.dataset.route === route.view));
+    const pageEl = $(`[data-page="${targetPage}"]`);
+    if (pageEl) {
+      pageEl.querySelectorAll("[data-view]").forEach((v) => { v.hidden = v.dataset.view !== route.view; });
+      pageEl.querySelectorAll(".side-link").forEach((l) => l.classList.toggle("is-active", l.dataset.route === route.view));
+    }
 
     const titleMap = {
       dashboard: "الرئيسية",
       exams: "امتحاناتي",
+      students: "طلابي",
       builder: "منشئ الامتحان",
       "exam-details": "تفاصيل الامتحان",
       grading: "التصحيح",
@@ -1198,16 +1398,40 @@ function handleRoute() {
       settings: "الإعدادات",
       credits: "الرصيد والباقات",
       subscription: "الباقات",
-      checkout: "الدفع"
+      checkout: "الدفع",
+      "student-dashboard": "الرئيسية",
+      "student-teachers": "المعلمين",
+      "student-masters": "امتحانات المستر",
+      "student-history": "امتحاناتي السابقة",
+      "student-join": "انضم لغرفة",
+      "student-profile": "الملف الشخصي"
     };
-    const titleEl = $("[data-page-title]");
+    const titleEl = $(`[data-page="${targetPage}"] [data-page-title]`);
     if (titleEl) titleEl.textContent = titleMap[route.view] || "";
 
-    const backBtn = $("[data-back]");
-    if (backBtn) backBtn.hidden = route.view === "dashboard";
+    const backBtn = $(`[data-page="${targetPage}"] [data-back]`);
+    if (backBtn) {
+      backBtn.hidden = route.view === "dashboard" || route.view === "student-dashboard";
+    }
   }
 
   currentRoute = path;
+
+  // Auth guard
+  const publicRoutes = ["/login", "/"];
+  if (!publicRoutes.includes(path)) {
+    if (!currentUser) {
+      sessionStorage.setItem("qeyasquiz.redirectAfterLogin", path + (qs ? "?" + qs : ""));
+      navigate("/login");
+      return;
+    }
+    // Role check
+    if (route.role && currentRole && route.role !== currentRole) {
+      navigate(currentRole === "teacher" ? "/app/dashboard" : "/student/dashboard");
+      return;
+    }
+  }
+
   const handler = routeHandlers[path];
   if (handler) {
     Promise.resolve(handler(params)).catch((err) => {
@@ -1242,139 +1466,118 @@ onAuthStateChanged(auth, async (user) => {
   currentUser = user;
 
   if (!user) {
-    currentProfile = null; currentStudentProfile = null; currentCredits = null;
+    currentProfile = null;
+    currentStudentProfile = null;
+    currentCredits = null;
+    currentRole = null;
     stopCreditsListener();
-    clearProfileCache(); clearStudentCache();
+    clearProfileCache();
     authResolved = true;
     hideGlobalLoading();
 
-    const isStudentOrPublic = ["/", "/login", "/exam", "/result"].includes(currentRoute);
-    if (!isStudentOrPublic) navigate("/login");
-    else if (currentRoute && routeHandlers[currentRoute]) {
+    const isPublic = ["/", "/login", "/exam", "/result"].includes(currentRoute);
+    if (!isPublic) {
+      navigate("/login");
+      return;
+    }
+    if (currentRoute && routeHandlers[currentRoute]) {
       Promise.resolve(routeHandlers[currentRoute](currentParams || new URLSearchParams())).catch(() => {});
     }
     return;
   }
 
-  const cachedTeacher = getCachedProfile();
-  const cachedStudent = getCachedStudentProfile();
-  const hasTeacherCache = cachedTeacher && cachedTeacher.uid === user.uid && cachedTeacher.role === "teacher";
+  const cached = getCachedProfile();
+  const cachedRole = localStorage.getItem(ROLE_CACHE_KEY);
 
-  if (hasTeacherCache) {
-    currentProfile = cachedTeacher;
-    currentStudentProfile = cachedStudent && cachedStudent.uid === user.uid ? cachedStudent : null;
+  if (cached && cached.uid === user.uid && cachedRole) {
+    currentRole = cachedRole;
+    if (cachedRole === "teacher") {
+      currentProfile = cached;
+    } else {
+      currentStudentProfile = cached;
+    }
     authResolved = true;
     hideGlobalLoading();
-    updateUserUI(currentProfile, user);
+    updateUserUI();
     startCreditsListener(user.uid);
     resolveAuthRoute();
 
-    loadProfile(user.uid).then(async (fresh) => {
-      if (fresh) {
-        currentProfile = fresh;
-        cacheProfile(fresh);
-        updateUserUI(fresh, user);
-
-        if (!fresh.publicId) {
-          try {
-            const newPublicId = await ensureUserHasPublicId(user.uid);
-            if (newPublicId) {
-              currentProfile.publicId = newPublicId;
-              cacheProfile(currentProfile);
-              updateUserUI(currentProfile, user);
-            }
-          } catch {}
-        }
-
-        try { await ensureSignupBonus(user.uid); } catch {}
-
-        if (currentRoute && currentRoute.startsWith("/app/") && routeHandlers[currentRoute]) {
-          Promise.resolve(routeHandlers[currentRoute](currentParams || new URLSearchParams())).catch(() => {});
-        }
-      }
-    }).catch(() => {});
-
-    loadStudentProfile(user.uid).then((fresh) => {
-      if (fresh) { currentStudentProfile = fresh; cacheStudentProfile(fresh); }
-    }).catch(() => {});
+    // Refresh in background
+    refreshProfileInBackground(user.uid, cachedRole);
     return;
   }
 
-  const goingToApp = currentRoute && currentRoute.startsWith("/app/");
-  if (goingToApp) showGlobalLoading("جارٍ تحميل حسابك…");
+  showGlobalLoading("جارٍ تحميل حسابك...");
 
   try {
     const [teacherProfile, studentProfile] = await Promise.all([
-      loadProfile(user.uid).catch(() => null),
+      loadTeacherProfile(user.uid).catch(() => null),
       loadStudentProfile(user.uid).catch(() => null)
     ]);
 
-    currentProfile = teacherProfile;
-    currentStudentProfile = studentProfile;
-
     if (teacherProfile) {
-      cacheProfile(teacherProfile);
-
-      if (!teacherProfile.publicId) {
-        try {
-          const newPublicId = await ensureUserHasPublicId(user.uid);
-          if (newPublicId) {
-            currentProfile.publicId = newPublicId;
-            cacheProfile(currentProfile);
-          }
-        } catch {}
-      }
-
-      try { await ensureSignupBonus(user.uid); } catch {}
+      currentRole = "teacher";
+      currentProfile = teacherProfile;
+      cacheProfile(teacherProfile, "teacher");
       startCreditsListener(user.uid);
+      try { await ensureSignupBonus(user.uid); } catch {}
+    } else if (studentProfile) {
+      currentRole = "student";
+      currentStudentProfile = studentProfile;
+      cacheProfile(studentProfile, "student");
+    } else {
+      // New user, no profile — redirect to login (shouldn't happen normally)
+      currentRole = null;
     }
-
-    if (studentProfile) cacheStudentProfile(studentProfile);
   } catch (err) {
-    console.warn("[auth] load profiles failed", err);
-    currentProfile = null; currentStudentProfile = null;
+    console.warn("[auth] load profile failed", err);
   }
 
   authResolved = true;
   hideGlobalLoading();
-  updateUserUI(currentProfile, user);
+  updateUserUI();
   resolveAuthRoute();
 });
 
+async function refreshProfileInBackground(uid, role) {
+  try {
+    if (role === "teacher") {
+      const fresh = await loadTeacherProfile(uid);
+      if (fresh) {
+        currentProfile = fresh;
+        cacheProfile(fresh, "teacher");
+        updateUserUI();
+        try { await ensureSignupBonus(uid); } catch {}
+        if (currentRoute?.startsWith("/app/") && routeHandlers[currentRoute]) {
+          Promise.resolve(routeHandlers[currentRoute](currentParams || new URLSearchParams())).catch(() => {});
+        }
+      }
+    } else {
+      const fresh = await loadStudentProfile(uid);
+      if (fresh) {
+        currentStudentProfile = fresh;
+        cacheProfile(fresh, "student");
+        updateUserUI();
+      }
+    }
+  } catch {}
+}
+
 function resolveAuthRoute() {
-  const hasTeacherProfile = currentProfile && currentProfile.username;
-  const isStudentOrPublic = ["/exam", "/result", "/"].includes(currentRoute);
+  const hasTeacher = currentRole === "teacher" && currentProfile;
+  const hasStudent = currentRole === "student" && currentStudentProfile;
 
-  if (!currentUser) {
-    if (isStudentOrPublic || currentRoute === "/login") {
-      if (currentRoute && routeHandlers[currentRoute]) {
-        Promise.resolve(routeHandlers[currentRoute](currentParams || new URLSearchParams())).catch(() => {});
-      }
-      return;
-    }
-    navigate("/login");
+  if (currentRoute === "/login" || currentRoute === "/") {
+    if (hasTeacher) navigate("/app/dashboard");
+    else if (hasStudent) navigate("/student/dashboard");
     return;
   }
 
-  if (!hasTeacherProfile) {
-    if (isStudentOrPublic) {
-      if (currentRoute && routeHandlers[currentRoute]) {
-        Promise.resolve(routeHandlers[currentRoute](currentParams || new URLSearchParams())).catch(() => {});
-      }
-      return;
+  // If user has no profile but logged in — redirect to login (setup flow handled by forms)
+  if (!hasTeacher && !hasStudent) {
+    if (!["/login", "/", "/exam", "/result"].includes(currentRoute)) {
+      navigate("/login");
     }
-    if (currentRoute === "/setup") {
-      if (routeHandlers[currentRoute]) {
-        Promise.resolve(routeHandlers[currentRoute](currentParams || new URLSearchParams())).catch(() => {});
-      }
-      return;
-    }
-    navigate("/setup");
-    return;
-  }
-
-  if (currentRoute === "/login" || currentRoute === "/setup") {
-    navigate("/app/dashboard");
     return;
   }
 
@@ -1383,247 +1586,337 @@ function resolveAuthRoute() {
   }
 }
 
-function updateUserUI(profile, user) {
-  const name = profile?.fullName || user?.displayName || "";
-  const handle = "@" + (profile?.username || "");
-  const photo = profile?.photoURL || user?.photoURL || "";
-  const publicId = profile?.publicId ? String(profile.publicId) : "—";
+function updateUserUI() {
+  if (currentRole === "teacher" && currentProfile) {
+    const name = currentProfile.fullName || "";
+    const handle = "@" + (currentProfile.username || "");
+    const photo = currentProfile.photoURL || "";
+    const publicId = currentProfile.publicId ? String(currentProfile.publicId) : "-";
 
-  $$("[data-user-name]").forEach((e) => (e.textContent = name));
-  $$("[data-user-handle]").forEach((e) => (e.textContent = handle));
-  $$("[data-user-id]").forEach((e) => (e.textContent = `ID: ${publicId}`));
-  $$("[data-user-avatar]").forEach((e) => { if (photo) e.src = photo; });
-  $$("[data-profile-id]").forEach((e) => { e.textContent = publicId; });
+    $$("[data-user-name]").forEach((e) => { e.textContent = name; });
+    $$("[data-user-handle]").forEach((e) => { e.textContent = handle; });
+    $$("[data-user-id]").forEach((e) => { e.textContent = `ID: ${publicId}`; });
+    $$("[data-user-avatar]").forEach((e) => { if (photo) e.src = photo; });
+    $$("[data-profile-avatar]").forEach((e) => { if (photo) e.src = photo; });
+    $$("[data-profile-name]").forEach((e) => { e.textContent = name; });
+    $$("[data-profile-handle]").forEach((e) => { e.textContent = handle; });
+    $$("[data-profile-id]").forEach((e) => { e.textContent = publicId; });
+    $$("[data-profile-governorate]").forEach((e) => { e.textContent = currentProfile.governorate || "-"; });
+    $$("[data-profile-phone]").forEach((e) => { e.textContent = currentProfile.phone || "-"; });
+  }
+
+  if (currentRole === "student" && currentStudentProfile) {
+    const name = currentStudentProfile.fullName || "";
+    const publicId = currentStudentProfile.publicId ? String(currentStudentProfile.publicId) : "-";
+    const initial = getInitials(name);
+    const color = currentStudentProfile.avatarColor || colorFromString(currentStudentProfile.uid);
+
+    $$("[data-student-name]").forEach((e) => { e.textContent = name; });
+    $$("[data-student-id]").forEach((e) => { e.textContent = `ID: ${publicId}`; });
+
+    $$("[data-student-avatar-letter]").forEach((e) => {
+      e.textContent = initial;
+      e.style.background = color;
+    });
+
+    $$("[data-profile-letter]").forEach((e) => {
+      e.textContent = initial;
+      e.style.background = color;
+    });
+
+    $$("[data-profile-name]").forEach((e) => { e.textContent = name; });
+    $$("[data-profile-id]").forEach((e) => { e.textContent = publicId; });
+    $$("[data-profile-governorate]").forEach((e) => { e.textContent = currentStudentProfile.governorate || "-"; });
+    $$("[data-profile-phone]").forEach((e) => { e.textContent = currentStudentProfile.phone || "-"; });
+    $$("[data-profile-parent-phone]").forEach((e) => { e.textContent = currentStudentProfile.parentPhone || "-"; });
+    $$("[data-profile-mother-phone]").forEach((e) => { e.textContent = currentStudentProfile.motherPhone || "-"; });
+    $$("[data-profile-email]").forEach((e) => { e.textContent = currentStudentProfile.email || "-"; });
+  }
 }
 
 /* ============================================================
-   LANDING
-   ============================================================ */
-function initLanding() {
-  document.querySelectorAll("[data-year]").forEach((e) => (e.textContent = new Date().getFullYear()));
-}
-
-/* ============================================================
-   LOGIN
+   LOGIN PAGE
    ============================================================ */
 function initLogin() {
-  const btn = $("[data-google-signin]");
-  if (!btn || btn.dataset.bound) return;
-  btn.dataset.bound = "1";
+  // Populate governorates in both forms
+  populateGovernorates();
 
-  const status = $("[data-auth-status]");
-  const errBox = $("[data-auth-error]");
-  const errText = $("[data-auth-error-text]");
-  const tabs = $$(".auth-tab");
-  const titleEl = $("[data-auth-title]");
-  const subtitleEl = $("[data-auth-subtitle]");
-  const googleText = $("[data-auth-google-text]");
+  // Show signin by default
+  showAuthView("signin");
 
-  tabs.forEach((tab) => {
+  // Bind tabs
+  $$("[data-auth-mode]").forEach((tab) => {
     tab.addEventListener("click", () => {
-      const mode = tab.dataset.authTab;
-      tabs.forEach((x) => {
-        x.classList.toggle("is-active", x === tab);
-        x.setAttribute("aria-selected", x === tab ? "true" : "false");
-      });
-      if (mode === "signin") {
-        titleEl.textContent = "مرحبًا بعودتك";
-        subtitleEl.textContent = "سجّل الدخول للمتابعة.";
-        googleText.textContent = "الدخول بحساب Google";
-      } else {
-        titleEl.textContent = "أنشئ حسابك";
-        subtitleEl.textContent = "ابدأ خلال ثوانٍ.";
-        googleText.textContent = "التسجيل بحساب Google";
-      }
+      const mode = tab.dataset.authMode;
+      if (mode === "signup") showAuthView("role-select");
+      else showAuthView("signin");
     });
   });
 
-  btn.addEventListener("click", async () => {
-    errBox.hidden = true;
-    status.hidden = false;
-    btn.classList.add("is-loading");
-    try { await signInWithGoogle(); }
-    catch (err) {
-      status.hidden = true;
-      btn.classList.remove("is-loading");
-      errBox.hidden = false;
-      errText.textContent = err.message;
-    }
+  // Role selection
+  $$("[data-role]").forEach((card) => {
+    card.addEventListener("click", () => {
+      const role = card.dataset.role;
+      if (role === "teacher") showAuthView("signup-teacher");
+      else if (role === "student") showAuthView("signup-student");
+    });
+  });
+
+  // Back buttons
+  $$("[data-back-to-role]").forEach((btn) => {
+    btn.addEventListener("click", () => showAuthView("role-select"));
+  });
+  $$("[data-back-to-signin]").forEach((btn) => {
+    btn.addEventListener("click", () => showAuthView("signin"));
+  });
+
+  // Sign in form
+  const signinForm = $("[data-signin-form]");
+  if (signinForm && !signinForm.dataset.bound) {
+    signinForm.dataset.bound = "1";
+    signinForm.addEventListener("submit", handleSignIn);
+  }
+
+  // Teacher form
+  const teacherForm = $("[data-teacher-form]");
+  if (teacherForm && !teacherForm.dataset.bound) {
+    teacherForm.dataset.bound = "1";
+    teacherForm.addEventListener("submit", handleTeacherSignup);
+  }
+
+  // Student form
+  const studentForm = $("[data-student-form]");
+  if (studentForm && !studentForm.dataset.bound) {
+    studentForm.dataset.bound = "1";
+    studentForm.addEventListener("submit", handleStudentSignup);
+  }
+
+  // Username check
+  const usernameInput = $("[data-teacher-username]");
+  if (usernameInput && !usernameInput.dataset.bound) {
+    usernameInput.dataset.bound = "1";
+    const status = $("[data-teacher-username-status]");
+    const checkUname = debounce(async () => {
+      const val = usernameInput.value.trim();
+      if (!status) return;
+      status.textContent = "";
+      status.className = "input-status";
+      if (!val) return;
+      if (!validUsername(val)) {
+        status.textContent = "غير صالح";
+        status.classList.add("is-taken");
+        return;
+      }
+      status.textContent = "...";
+      status.classList.add("is-checking");
+      try {
+        const ok = await checkUsernameAvailability(val);
+        status.classList.remove("is-checking");
+        if (ok) { status.textContent = "متاح"; status.classList.add("is-available"); }
+        else { status.textContent = "مأخوذ"; status.classList.add("is-taken"); }
+      } catch { status.textContent = ""; }
+    }, 400);
+    usernameInput.addEventListener("input", checkUname);
+  }
+
+  // Forgot password
+  const forgotBtn = $("[data-forgot-password]");
+  if (forgotBtn && !forgotBtn.dataset.bound) {
+    forgotBtn.dataset.bound = "1";
+    forgotBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const email = $("[data-signin-email]")?.value.trim();
+      if (!email) {
+        toast("أدخل البريد الإلكتروني أولا", "warning");
+        return;
+      }
+      try {
+        await sendPasswordResetEmail(auth, email);
+        toast("تم إرسال رابط إعادة التعيين", "success");
+      } catch (err) {
+        toast("تعذّر الإرسال - تحقق من البريد", "error");
+      }
+    });
+  }
+}
+
+function populateGovernorates() {
+  const govSelectors = [$("[data-teacher-governorate]"), $("[data-student-governorate]")];
+  govSelectors.forEach((sel) => {
+    if (!sel || sel.dataset.populated) return;
+    sel.dataset.populated = "1";
+    GOVERNORATES.forEach((g) => {
+      sel.appendChild(el("option", { value: g, text: g }));
+    });
   });
 }
 
-/* ============================================================
-   SETUP (Teacher)
-   ============================================================ */
-let setupState = { photoFile: null, selectedSubjects: [] };
-
-function initSetup() {
-  const form = $("[data-setup-form]");
-  if (!form || form.dataset.bound) return;
-  form.dataset.bound = "1";
-
-  setupState = { photoFile: null, selectedSubjects: [] };
-
-  const usernameInput = $("[data-username-input]");
-  const usernameStatus = $("[data-username-status]");
-  const usernameError = $("[data-username-error]");
-  const fullNameInput = $("[data-fullname-input]");
-  const avatarPreview = $("[data-avatar-preview]");
-  const avatarInput = $("[data-avatar-input]");
-  const avatarPick = $("[data-avatar-pick]");
-  const avatarReset = $("[data-avatar-reset]");
-  const subjectGrid = $("[data-subject-grid]");
-  const customInput = $("[data-custom-subject]");
-  const addCustomBtn = $("[data-add-custom-subject]");
-  const customChips = $("[data-custom-chips]");
-  const subjectsError = $("[data-subjects-error]");
-
-  if (currentUser) {
-    if (currentUser.displayName) fullNameInput.value = currentUser.displayName;
-    if (currentUser.photoURL) avatarPreview.src = currentUser.photoURL;
-    const base = (currentUser.email || "").split("@")[0].replace(/[^a-zA-Z0-9_]/g, "").slice(0, 20);
-    if (base.length >= 3) usernameInput.value = base;
-  }
-
-  function renderSubjectGrid() {
-    subjectGrid.innerHTML = "";
-    SUBJECTS.forEach((s) => {
-      const selected = setupState.selectedSubjects.includes(s.id);
-      const chip = el("button", {
-        type: "button",
-        class: `subject-chip ${selected ? "is-selected" : ""}`,
-        text: s.ar,
-        onclick: () => {
-          const idx = setupState.selectedSubjects.indexOf(s.id);
-          if (idx >= 0) setupState.selectedSubjects.splice(idx, 1);
-          else setupState.selectedSubjects.push(s.id);
-          renderSubjectGrid();
-        }
-      });
-      subjectGrid.appendChild(chip);
-    });
-  }
-  renderSubjectGrid();
-
-  const customSubjects = [];
-  function renderCustomChips() {
-    customChips.innerHTML = "";
-    customSubjects.forEach((name, i) => {
-      const chip = el("span", { class: "chip" });
-      chip.appendChild(document.createTextNode(name));
-      const rm = el("button", { type: "button", class: "chip-remove", "aria-label": "حذف" });
-      rm.appendChild(svgIcon("x", 10));
-      rm.addEventListener("click", () => { customSubjects.splice(i, 1); renderCustomChips(); });
-      chip.appendChild(rm);
-      customChips.appendChild(chip);
-    });
-  }
-
-  addCustomBtn.addEventListener("click", () => {
-    const v = customInput.value.trim();
-    if (!v || v.length < 2 || customSubjects.includes(v)) return;
-    customSubjects.push(v);
-    customInput.value = "";
-    renderCustomChips();
+function showAuthView(viewName) {
+  $$("[data-auth-view]").forEach((v) => {
+    v.hidden = v.dataset.authView !== viewName;
   });
+  $$("[data-auth-mode]").forEach((tab) => {
+    const mode = tab.dataset.authMode;
+    const isActive = (viewName === "signin" && mode === "signin") ||
+                     (viewName !== "signin" && mode === "signup");
+    tab.classList.toggle("is-active", isActive);
+    tab.setAttribute("aria-selected", isActive ? "true" : "false");
+  });
+}
 
-  const checkUname = debounce(async () => {
-    const val = usernameInput.value.trim();
-    usernameError.hidden = true;
-    usernameStatus.textContent = "";
-    usernameStatus.className = "input-status";
-    if (!val) return;
-    if (!validUsername(val)) {
-      usernameError.hidden = false;
-      usernameError.textContent = "3–24 حرفًا. حروف وأرقام وشرطة سفلية فقط.";
+function showAuthError(role, msg) {
+  const map = {
+    signin: "[data-auth-error]",
+    teacher: "[data-auth-error-teacher]",
+    student: "[data-auth-error-student]"
+  };
+  const errorEl = $(map[role] || map.signin);
+  if (!errorEl) return;
+  const textEl = errorEl.querySelector("span[data-auth-error-text], span[data-auth-error-text-teacher], span[data-auth-error-text-student]");
+  errorEl.hidden = false;
+  if (textEl) textEl.textContent = msg;
+}
+
+function hideAuthError(role) {
+  const map = {
+    signin: "[data-auth-error]",
+    teacher: "[data-auth-error-teacher]",
+    student: "[data-auth-error-student]"
+  };
+  const errorEl = $(map[role] || map.signin);
+  if (errorEl) errorEl.hidden = true;
+}
+
+function authErrorMessage(code) {
+  return {
+    "auth/email-already-in-use": "البريد الإلكتروني مستخدم بالفعل",
+    "auth/invalid-email": "البريد الإلكتروني غير صالح",
+    "auth/weak-password": "كلمة المرور ضعيفة - 6 أحرف على الأقل",
+    "auth/user-not-found": "مفيش حساب بالبريد ده",
+    "auth/wrong-password": "كلمة المرور غلط",
+    "auth/invalid-credential": "البريد أو كلمة المرور غير صحيحة",
+    "auth/too-many-requests": "حاولت كتير - استنى شوية",
+    "auth/network-request-failed": "تعذّر الاتصال - تحقق من الإنترنت"
+  }[code] || "حدث خطأ - حاول مرة أخرى";
+}
+
+async function handleSignIn(e) {
+  e.preventDefault();
+  hideAuthError("signin");
+  const email = $("[data-signin-email]").value.trim();
+  const password = $("[data-signin-password]").value;
+  const btn = $("[data-signin-submit]");
+
+  if (!email || !password) {
+    showAuthError("signin", "أدخل البريد وكلمة المرور");
+    return;
+  }
+
+  btn.classList.add("is-loading");
+  try {
+    await signInWithEmailAndPassword(auth, email, password);
+    // onAuthStateChanged handles redirect
+  } catch (err) {
+    btn.classList.remove("is-loading");
+    showAuthError("signin", authErrorMessage(err.code));
+  }
+}
+
+async function handleTeacherSignup(e) {
+  e.preventDefault();
+  hideAuthError("teacher");
+
+  const phone = $("[data-teacher-phone]").value.trim();
+  const email = $("[data-teacher-email]").value.trim();
+  const username = $("[data-teacher-username]").value.trim();
+  const fullName = $("[data-teacher-fullname]").value.trim();
+  const governorate = $("[data-teacher-governorate]").value;
+  const password = $("[data-teacher-password]").value;
+  const passwordConfirm = $("[data-teacher-password-confirm]").value;
+  const btn = $("[data-teacher-submit]");
+
+  if (!validPhone(phone)) { showAuthError("teacher", "رقم الهاتف غير صحيح"); return; }
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showAuthError("teacher", "البريد الإلكتروني غير صحيح"); return; }
+  if (!validUsername(username)) { showAuthError("teacher", "اسم المستخدم 3-24 حرفا"); return; }
+  if (fullName.length < 3) { showAuthError("teacher", "أدخل الاسم الكامل"); return; }
+  if (!governorate) { showAuthError("teacher", "اختر المحافظة"); return; }
+  if (password.length < 6) { showAuthError("teacher", "كلمة المرور 6 أحرف على الأقل"); return; }
+  if (password !== passwordConfirm) { showAuthError("teacher", "كلمتا المرور غير متطابقتين"); return; }
+
+  btn.classList.add("is-loading");
+  try {
+    const cred = await createUserWithEmailAndPassword(auth, email, password);
+    await updateProfile(cred.user, { displayName: fullName });
+
+    const profile = await createTeacherProfile(cred.user.uid, {
+      phone, email, username, fullName, governorate
+    });
+
+    currentProfile = profile;
+    currentRole = "teacher";
+    cacheProfile(profile, "teacher");
+    startCreditsListener(cred.user.uid);
+    try { await ensureSignupBonus(cred.user.uid); } catch {}
+
+    toast("تم إنشاء الحساب بنجاح", "success");
+    navigate("/app/dashboard");
+  } catch (err) {
+    btn.classList.remove("is-loading");
+    if (err.message === "USERNAME_TAKEN") {
+      showAuthError("teacher", "اسم المستخدم مأخوذ");
       return;
     }
-    usernameStatus.textContent = "…";
-    usernameStatus.classList.add("is-checking");
-    try {
-      const ok = await checkUsernameAvailability(val);
-      usernameStatus.classList.remove("is-checking");
-      if (ok) { usernameStatus.textContent = "متاح"; usernameStatus.classList.add("is-available"); }
-      else { usernameStatus.textContent = "مأخوذ"; usernameStatus.classList.add("is-taken"); }
-    } catch { usernameStatus.textContent = ""; }
-  }, 400);
+    showAuthError("teacher", authErrorMessage(err.code) || err.message || "تعذّر إنشاء الحساب");
+  }
+}
 
-  usernameInput.addEventListener("input", checkUname);
+async function handleStudentSignup(e) {
+  e.preventDefault();
+  hideAuthError("student");
 
-  avatarPick.addEventListener("click", () => avatarInput.click());
-  avatarInput.addEventListener("change", () => {
-    const f = avatarInput.files?.[0];
-    if (!f) return;
-    if (f.size > 2 * 1024 * 1024) { toast("الحد الأقصى 2 ميجابايت", "warning"); return; }
-    setupState.photoFile = f;
-    avatarPreview.src = URL.createObjectURL(f);
-  });
-  avatarReset.addEventListener("click", () => {
-    setupState.photoFile = null;
-    avatarPreview.src = currentUser?.photoURL || "";
-    avatarInput.value = "";
-  });
+  const fullName = $("[data-student-fullname]").value.trim();
+  const phone = $("[data-student-phone]").value.trim();
+  const parentPhone = $("[data-student-parent-phone]").value.trim();
+  const motherPhone = $("[data-student-mother-phone]").value.trim();
+  const governorate = $("[data-student-governorate]").value;
+  const email = $("[data-student-email]").value.trim();
+  const password = $("[data-student-password]").value;
+  const passwordConfirm = $("[data-student-password-confirm]").value;
+  const btn = $("[data-student-submit]");
 
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    let ok = true;
+  const nameWords = fullName.split(/\s+/).filter(Boolean);
+  if (nameWords.length < 4) { showAuthError("student", "اكتب اسمك رباعيا"); return; }
+  if (!validPhone(phone)) { showAuthError("student", "رقم هاتفك غير صحيح"); return; }
+  if (!validPhone(parentPhone)) { showAuthError("student", "رقم الوالد غير صحيح"); return; }
+  if (!validPhone(motherPhone)) { showAuthError("student", "رقم الوالدة غير صحيح"); return; }
+  if (!governorate) { showAuthError("student", "اختر المحافظة"); return; }
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showAuthError("student", "البريد الإلكتروني غير صحيح"); return; }
+  if (password.length < 6) { showAuthError("student", "كلمة المرور 6 أحرف على الأقل"); return; }
+  if (password !== passwordConfirm) { showAuthError("student", "كلمتا المرور غير متطابقتين"); return; }
 
-    const uname = usernameInput.value.trim();
-    if (!validUsername(uname)) {
-      usernameError.hidden = false;
-      usernameError.textContent = "3–24 حرفًا. حروف وأرقام وشرطة سفلية فقط.";
-      ok = false;
-    }
+  btn.classList.add("is-loading");
+  try {
+    const cred = await createUserWithEmailAndPassword(auth, email, password);
+    await updateProfile(cred.user, { displayName: fullName });
 
-    const fullName = fullNameInput.value.trim();
-    if (fullName.length < 3) { toast("أدخل اسمك الكامل", "warning"); ok = false; }
+    const profile = await createStudentProfile(cred.user.uid, {
+      fullName, phone, parentPhone, motherPhone, governorate, email
+    });
 
-    if (setupState.selectedSubjects.length === 0 && customSubjects.length === 0) {
-      subjectsError.hidden = false;
-      subjectsError.textContent = "اختر مادة واحدة على الأقل";
-      ok = false;
-    } else subjectsError.hidden = true;
+    currentStudentProfile = profile;
+    currentRole = "student";
+    cacheProfile(profile, "student");
 
-    if (!ok) return;
-
-    const submitBtn = $("[data-submit]");
-    submitBtn.classList.add("is-loading");
-    try {
-      let photoURL = currentUser?.photoURL || "";
-      if (setupState.photoFile) {
-        try { photoURL = await uploadAvatar(currentUser.uid, setupState.photoFile); }
-        catch (err) { toast(uploadErrorMessage(err, "2 ميجابايت") + " — سيتم استخدام صورة Google", "warning", 6000); }
-      }
-
-      const allSubjects = [...setupState.selectedSubjects, ...customSubjects.map((name) => "custom:" + name)];
-      await claimUsername(currentUser.uid, uname, { fullName, photoURL, subjects: allSubjects });
-
-      try { await ensureUserHasPublicId(currentUser.uid); } catch {}
-      try { await ensureSignupBonus(currentUser.uid); } catch {}
-
-      currentProfile = await loadProfile(currentUser.uid);
-      if (currentProfile) cacheProfile(currentProfile);
-      updateUserUI(currentProfile, currentUser);
-      startCreditsListener(currentUser.uid);
-      toast("تم حفظ الملف", "success");
-      navigate("/app/dashboard");
-    } catch (err) {
-      submitBtn.classList.remove("is-loading");
-      if (err.message === "USERNAME_TAKEN") {
-        usernameError.hidden = false;
-        usernameError.textContent = "اسم المستخدم مأخوذ";
-        usernameStatus.textContent = "مأخوذ";
-        usernameStatus.className = "input-status is-taken";
-      } else {
-        console.error(err);
-        toast("تعذّر حفظ البيانات.", "error");
-      }
-    }
-  });
+    toast("تم إنشاء الحساب بنجاح", "success");
+    navigate("/student/dashboard");
+  } catch (err) {
+    btn.classList.remove("btn-loading", "is-loading");
+    showAuthError("student", authErrorMessage(err.code) || err.message || "تعذّر إنشاء الحساب");
+  }
 }
 
 /* ============================================================
-   DASHBOARD
+   TEACHER DASHBOARD
    ============================================================ */
 async function renderDashboard() {
   if (!currentProfile) return;
@@ -1635,21 +1928,28 @@ async function renderDashboard() {
     welcomeTitle.textContent = `${greeting}، ${(currentProfile.fullName || "").split(" ")[0] || ""}`;
   }
 
-  const exams = await listExams(currentProfile.uid);
+  const [exams, students, pendingRequests] = await Promise.all([
+    listExams(currentProfile.uid),
+    listMyStudents(currentProfile.uid),
+    listTeacherRequests(currentProfile.uid, "pending")
+  ]);
+
+  let waitingGrading = 0;
+  for (const exam of exams.slice(0, 15)) {
+    const atts = await listAttempts(exam.id);
+    waitingGrading += atts.filter((a) => a.status === "submitted" && !a.gradedAt).length;
+  }
+
   const stats = {
     totalExams: exams.length,
     activeExams: exams.filter((e) => computeStatus(e) === "active").length,
-    submittedStudents: 0,
-    waitingGrading: 0
+    totalStudents: students.length,
+    waitingGrading
   };
 
-  for (const exam of exams.slice(0, 15)) {
-    const atts = await listAttempts(exam.id);
-    stats.submittedStudents += atts.filter((a) => a.status === "submitted" || a.status === "graded").length;
-    stats.waitingGrading += atts.filter((a) => a.status === "submitted" && !a.gradedAt).length;
-  }
-
-  $$("[data-stat]").forEach((e) => { e.textContent = String(stats[e.dataset.stat] ?? 0); });
+  $$("[data-stat]").forEach((e) => {
+    if (stats[e.dataset.stat] != null) e.textContent = String(stats[e.dataset.stat]);
+  });
 
   const recentHost = $("[data-recent-exams]");
   if (recentHost) {
@@ -1664,6 +1964,18 @@ async function renderDashboard() {
       exams.slice(0, 6).forEach((exam) => recentHost.appendChild(buildExamCard(exam)));
     }
   }
+
+  const requestsHost = $("[data-recent-requests]");
+  if (requestsHost) {
+    requestsHost.innerHTML = "";
+    if (!pendingRequests.length) {
+      requestsHost.appendChild(el("div", { class: "empty" }, [
+        el("p", { class: "text-muted", text: "لا يوجد طلبات جديدة." })
+      ]));
+    } else {
+      pendingRequests.slice(0, 6).forEach((req) => requestsHost.appendChild(buildRequestRow(req, true)));
+    }
+  }
 }
 
 function buildExamCard(exam) {
@@ -1672,7 +1984,7 @@ function buildExamCard(exam) {
   card.appendChild(el("div", { class: "exam-card-head" }, [
     el("div", {}, [
       el("div", { class: "exam-card-title", text: exam.title || "بدون اسم" }),
-      el("div", { class: "exam-card-sub", text: `${subjectLabel(exam.subject)} · ${gradeLabel(exam.grade)}` })
+      el("div", { class: "exam-card-sub", text: `${subjectLabel(exam.subject)} - ${gradeLabel(exam.grade)}` })
     ]),
     el("span", { class: `badge badge-${status}`, text: statusLabel(status) })
   ]));
@@ -1685,6 +1997,124 @@ function buildExamCard(exam) {
   ]));
   card.addEventListener("click", () => navigate(`/app/exam?id=${exam.id}`));
   return card;
+}
+
+function buildRequestRow(req, compact = false) {
+  const row = el("div", { class: "student-row" });
+  const initial = getInitials(req.studentName);
+  const color = colorFromString(req.studentUid);
+
+  const avatar = el("div", { class: "student-avatar-letter", text: initial });
+  avatar.style.background = color;
+  row.appendChild(avatar);
+
+  const info = el("div", { class: "student-info" });
+  info.appendChild(el("div", { class: "student-name", text: req.studentName }));
+  const meta = el("div", { class: "student-meta" });
+  meta.appendChild(el("span", {}, [svgIcon("at-sign", 12), document.createTextNode(` ${req.studentPublicId || "-"}`)]));
+  meta.appendChild(el("span", {}, [svgIcon("map-pin", 12), document.createTextNode(` ${req.studentGovernorate || "-"}`)]));
+  info.appendChild(meta);
+  row.appendChild(info);
+
+  if (!compact) {
+    const actions = el("div", { class: "student-actions" });
+    if (req.status === "pending") {
+      const approveBtn = el("button", { class: "btn btn-success btn-sm", type: "button" });
+      approveBtn.appendChild(svgIcon("check", 14));
+      approveBtn.appendChild(document.createTextNode(" قبول"));
+      approveBtn.addEventListener("click", async () => {
+        approveBtn.classList.add("is-loading");
+        try {
+          await approveStudentRequest(req.id);
+          toast("تم قبول الطالب", "success");
+          renderStudentsPage();
+        } catch (err) {
+          console.error(err);
+          toast("تعذّر القبول", "error");
+          approveBtn.classList.remove("is-loading");
+        }
+      });
+      actions.appendChild(approveBtn);
+
+      const rejectBtn = el("button", { class: "btn btn-outline btn-sm", type: "button" });
+      rejectBtn.appendChild(svgIcon("x", 14));
+      rejectBtn.appendChild(document.createTextNode(" رفض"));
+      rejectBtn.addEventListener("click", async () => {
+        rejectBtn.classList.add("is-loading");
+        try {
+          await rejectStudentRequest(req.id);
+          toast("تم رفض الطلب", "info");
+          renderStudentsPage();
+        } catch (err) {
+          console.error(err);
+          toast("تعذّر الرفض", "error");
+          rejectBtn.classList.remove("is-loading");
+        }
+      });
+      actions.appendChild(rejectBtn);
+    } else if (req.status === "approved") {
+      const removeBtn = el("button", { class: "btn btn-outline btn-sm", type: "button" });
+      removeBtn.appendChild(svgIcon("user-x", 14));
+      removeBtn.appendChild(document.createTextNode(" إزالة"));
+      removeBtn.addEventListener("click", async () => {
+        await confirmRemoveStudent(req.studentUid, req.studentName);
+      });
+      actions.appendChild(removeBtn);
+    }
+    row.appendChild(actions);
+  } else {
+    const badge = el("span", { class: `badge badge-${req.status}`, text: statusLabel(req.status) });
+    row.appendChild(badge);
+  }
+
+  return row;
+}
+
+async function confirmRemoveStudent(studentUid, studentName) {
+  const passwordInput = el("input", { type: "password", class: "input", placeholder: "كلمة المرور" });
+  const body = el("div", { class: "stack-sm" }, [
+    el("p", { class: "text-secondary" }, [
+      document.createTextNode(`هل تريد إزالة الطالب "${studentName}" من قائمتك؟`)
+    ]),
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label", text: "أدخل كلمة المرور للتأكيد" }),
+      passwordInput
+    ])
+  ]);
+
+  openModal({
+    title: "تأكيد الإزالة",
+    body,
+    actions: [
+      { label: "إلغاء", class: "btn-ghost" },
+      {
+        label: "إزالة",
+        class: "btn-danger",
+        onClick: async () => {
+          const password = passwordInput.value;
+          if (!password) { toast("أدخل كلمة المرور", "warning"); return false; }
+
+          try {
+            const cred = EmailAuthProvider.credential(auth.currentUser.email, password);
+            await reauthenticateWithCredential(auth.currentUser, cred);
+          } catch {
+            toast("كلمة المرور غير صحيحة", "error");
+            return false;
+          }
+
+          try {
+            await removeStudentFromTeacher(currentProfile.uid, studentUid);
+            toast("تم إزالة الطالب", "success");
+            renderStudentsPage();
+          } catch (err) {
+            console.error(err);
+            toast("تعذّرت الإزالة", "error");
+          }
+          return true;
+        }
+      }
+    ]
+  });
 }
 
 /* ============================================================
@@ -1751,7 +2181,592 @@ function applyExamFilters() {
 }
 
 /* ============================================================
-   EXAM BUILDER
+   MY STUDENTS PAGE
+   ============================================================ */
+let studentsState = { tab: "approved", search: "", approved: [], pending: [], rejected: [] };
+
+async function renderStudentsPage() {
+  const list = $("[data-students-list]");
+  if (!list) return;
+
+  list.innerHTML = "";
+  list.appendChild(el("div", { class: "sk-card" }, [el("div", { class: "skeleton sk-line sk-lg" })]));
+
+  // Bind tabs once
+  $$("[data-students-tab]").forEach((tab) => {
+    if (tab.dataset.bound) return;
+    tab.dataset.bound = "1";
+    tab.addEventListener("click", () => {
+      studentsState.tab = tab.dataset.studentsTab;
+      $$("[data-students-tab]").forEach((t) => t.classList.toggle("is-active", t === tab));
+      renderStudentsList();
+    });
+  });
+
+  // Bind search
+  const search = $("[data-students-search]");
+  if (search && !search.dataset.bound) {
+    search.dataset.bound = "1";
+    search.addEventListener("input", debounce(() => {
+      studentsState.search = search.value.trim().toLowerCase();
+      renderStudentsList();
+    }, 200));
+  }
+
+  const [approved, pending, rejected] = await Promise.all([
+    listMyStudents(currentProfile.uid),
+    listTeacherRequests(currentProfile.uid, "pending"),
+    listTeacherRequests(currentProfile.uid, "rejected")
+  ]);
+
+  studentsState.approved = approved;
+  studentsState.pending = pending;
+  studentsState.rejected = rejected;
+
+  // Update counts
+  const approvedCountEl = $("[data-approved-count]");
+  const pendingCountEl = $("[data-pending-count]");
+  if (approvedCountEl) approvedCountEl.textContent = String(approved.length);
+  if (pendingCountEl) {
+    pendingCountEl.textContent = String(pending.length);
+    pendingCountEl.hidden = pending.length === 0;
+  }
+
+  // Sidebar badge
+  const sideBadge = $("[data-students-badge]");
+  if (sideBadge) {
+    sideBadge.textContent = String(pending.length);
+    sideBadge.hidden = pending.length === 0;
+  }
+
+  renderStudentsList();
+}
+
+function renderStudentsList() {
+  const list = $("[data-students-list]");
+  const empty = $("[data-students-empty]");
+  const emptyTitle = $("[data-students-empty-title]");
+  const emptyText = $("[data-students-empty-text]");
+  if (!list) return;
+
+  let source = [];
+  let emptyT = "لا يوجد طلاب";
+  let emptyP = "لم يقم أي طالب بإرسال طلب انضمام بعد.";
+
+  if (studentsState.tab === "approved") {
+    source = studentsState.approved;
+    emptyT = "لا يوجد طلاب";
+    emptyP = "لم يتم قبول أي طالب بعد.";
+  } else if (studentsState.tab === "pending") {
+    source = studentsState.pending;
+    emptyT = "لا يوجد طلبات جديدة";
+    emptyP = "كل الطلبات تمت معالجتها.";
+  } else {
+    source = studentsState.rejected;
+    emptyT = "لا يوجد طلاب مرفوضون";
+    emptyP = "لم يتم رفض أي طالب.";
+  }
+
+  // Filter by search
+  if (studentsState.search) {
+    source = source.filter((s) => {
+      const name = (s.studentName || "").toLowerCase();
+      const pid = String(s.studentPublicId || "");
+      return name.includes(studentsState.search) || pid.includes(studentsState.search);
+    });
+  }
+
+  list.innerHTML = "";
+
+  if (!source.length) {
+    if (empty) empty.hidden = false;
+    if (emptyTitle) emptyTitle.textContent = emptyT;
+    if (emptyText) emptyText.textContent = emptyP;
+    return;
+  }
+
+  if (empty) empty.hidden = true;
+
+  source.forEach((item) => {
+    if (studentsState.tab === "approved") {
+      list.appendChild(buildStudentRow(item));
+    } else {
+      list.appendChild(buildRequestRow(item, false));
+    }
+  });
+}
+
+function buildStudentRow(student) {
+  const row = el("div", { class: "student-row" });
+  const initial = getInitials(student.studentName);
+  const color = colorFromString(student.studentUid);
+
+  const avatar = el("div", { class: "student-avatar-letter", text: initial });
+  avatar.style.background = color;
+  row.appendChild(avatar);
+
+  const info = el("div", { class: "student-info" });
+  info.appendChild(el("div", { class: "student-name", text: student.studentName }));
+  const meta = el("div", { class: "student-meta" });
+  meta.appendChild(el("span", {}, [svgIcon("at-sign", 12), document.createTextNode(` ${student.studentPublicId || "-"}`)]));
+  meta.appendChild(el("span", {}, [svgIcon("phone", 12), document.createTextNode(` ${student.studentPhone || "-"}`)]));
+  meta.appendChild(el("span", {}, [svgIcon("map-pin", 12), document.createTextNode(` ${student.studentGovernorate || "-"}`)]));
+  info.appendChild(meta);
+  row.appendChild(info);
+
+  const actions = el("div", { class: "student-actions" });
+  const removeBtn = el("button", { class: "btn btn-outline btn-sm", type: "button" });
+  removeBtn.appendChild(svgIcon("user-x", 14));
+  removeBtn.appendChild(document.createTextNode(" إزالة"));
+  removeBtn.addEventListener("click", () => confirmRemoveStudent(student.studentUid, student.studentName));
+  actions.appendChild(removeBtn);
+  row.appendChild(actions);
+
+  return row;
+}
+
+/* ============================================================
+   EXAM STATUS
+   ============================================================ */
+function computeStatus(exam) {
+  if (!exam) return "draft";
+  if (!exam.publishedAt) return "draft";
+  if (exam.manualStatus === "paused") return "paused";
+
+  const now = Date.now();
+  const start = exam.startAt?.toMillis ? exam.startAt.toMillis() : null;
+  const end = exam.endAt?.toMillis ? exam.endAt.toMillis() : null;
+
+  if (end && now > end) return "completed";
+  if (start && now < start) return "scheduled";
+  return "active";
+}
+
+function isExamFullyGraded(exam, attempts) {
+  const submitted = attempts.filter((a) => a.status === "submitted" || a.status === "graded");
+  if (!submitted.length) return false;
+  return submitted.every((a) => a.gradedAt != null);
+}
+
+function shouldShowLeaderboard(exam, attempts) {
+  const status = computeStatus(exam);
+  if (status !== "completed") return false;
+  if (!exam.resultPublishedAt) return false;
+  return isExamFullyGraded(exam, attempts);
+}
+
+function getAllExamQuestions(exam) {
+  if (exam.forms && exam.forms.length) return exam.forms.flatMap((f) => f.questions || []);
+  return exam.questions || [];
+}
+
+/* ============================================================
+   STUDENT DASHBOARD
+   ============================================================ */
+async function renderStudentDashboard() {
+  if (!currentStudentProfile) return;
+
+  const welcomeTitle = $("[data-student-welcome]");
+  if (welcomeTitle) {
+    const hour = new Date().getHours();
+    const greeting = hour < 12 ? "صباح الخير" : "مساء الخير";
+    welcomeTitle.textContent = `${greeting}، ${(currentStudentProfile.fullName || "").split(" ")[0] || ""}`;
+  }
+
+  const teachers = await listMyTeachers(currentStudentProfile.uid);
+  const upcoming = await listUpcomingExamsForStudent(teachers);
+  const history = await listStudentHistory(currentStudentProfile.uid);
+  const requestsSnap = await getDocs(query(
+    collection(db, "studentRequests"),
+    where("studentUid", "==", currentStudentProfile.uid),
+    where("status", "==", "pending")
+  ));
+
+  const stats = {
+    teachers: teachers.length,
+    availableExams: upcoming.filter((e) => computeStatus(e) === "active").length,
+    completedExams: history.filter((h) => h.status === "graded").length,
+    pendingRequests: requestsSnap.size
+  };
+
+  $$("[data-student-stat]").forEach((e) => {
+    if (stats[e.dataset.studentStat] != null) e.textContent = String(stats[e.dataset.studentStat]);
+  });
+
+  const upcomingHost = $("[data-student-upcoming]");
+  if (upcomingHost) {
+    upcomingHost.innerHTML = "";
+    const active = upcoming.filter((e) => computeStatus(e) === "active");
+    if (!active.length) {
+      upcomingHost.appendChild(el("div", { class: "empty" }, [
+        el("p", { class: "text-muted", text: "لا يوجد امتحانات متاحة حاليا." })
+      ]));
+    } else {
+      active.slice(0, 6).forEach((exam) => upcomingHost.appendChild(buildStudentExamCard(exam)));
+    }
+  }
+}
+
+function buildStudentExamCard(exam) {
+  const status = computeStatus(exam);
+  const card = el("article", { class: "card-brutal tint-1 exam-card" });
+  card.appendChild(el("div", { class: "exam-card-head" }, [
+    el("div", {}, [
+      el("div", { class: "exam-card-title", text: exam.title || "بدون اسم" }),
+      el("div", { class: "exam-card-sub", text: `${exam.teacherName || "-"} - ${subjectLabel(exam.subject)}` })
+    ]),
+    el("span", { class: `badge badge-${status}`, text: statusLabel(status) })
+  ]));
+  const meta = el("div", { class: "exam-card-meta" });
+  meta.appendChild(el("span", {}, [svgIcon("file-text", 14), document.createTextNode(`${exam.totalQuestions || 0} سؤال`)]));
+  meta.appendChild(el("span", {}, [svgIcon("timer", 14), document.createTextNode(`${exam.duration || 0} دقيقة`)]));
+  meta.appendChild(el("span", {}, [svgIcon("user", 14), document.createTextNode(gradeLabel(exam.grade))]));
+  card.appendChild(meta);
+  card.appendChild(el("div", { class: "exam-card-foot" }, [
+    el("button", { class: "btn btn-primary btn-sm", type: "button", text: "فتح الامتحان" })
+  ]));
+  card.addEventListener("click", () => navigate(`/exam?id=${exam.id}`));
+  return card;
+}
+
+/* ============================================================
+   STUDENT: TEACHERS SEARCH
+   ============================================================ */
+async function renderStudentTeachers() {
+  const results = $("[data-teachers-results]");
+  const empty = $("[data-teachers-empty]");
+  if (!results) return;
+
+  // Bind search
+  const search = $("[data-teacher-search]");
+  if (search && !search.dataset.bound) {
+    search.dataset.bound = "1";
+    search.addEventListener("input", debounce(async () => {
+      const q = search.value.trim();
+      if (!q) {
+        results.innerHTML = "";
+        if (empty) empty.hidden = false;
+        return;
+      }
+      results.innerHTML = "";
+      const found = await searchTeachers(q);
+      if (!found.length) {
+        if (empty) empty.hidden = false;
+        return;
+      }
+      if (empty) empty.hidden = true;
+      for (const t of found) {
+        results.appendChild(await buildTeacherCard(t));
+      }
+    }, 400));
+  }
+}
+
+async function buildTeacherCard(teacher) {
+  const card = el("div", { class: "teacher-card" });
+  const avatar = el("img", {
+    class: "teacher-card-avatar",
+    src: teacher.photoURL || "https://i.ibb.co/39cB8Cbv/file-00000000dac881f48b765e030a2b4313.png",
+    alt: "",
+    draggable: "false"
+  });
+  card.appendChild(avatar);
+
+  const info = el("div", { class: "teacher-card-info" });
+  info.appendChild(el("div", { class: "teacher-card-name", text: teacher.fullName || "-" }));
+  info.appendChild(el("div", { class: "teacher-card-username", text: "@" + (teacher.username || "-") }));
+  const meta = el("div", { class: "teacher-card-meta" });
+  meta.appendChild(el("span", {}, [svgIcon("at-sign", 12), document.createTextNode(` ${teacher.publicId || "-"}`)]));
+  meta.appendChild(el("span", {}, [svgIcon("map-pin", 12), document.createTextNode(` ${teacher.governorate || "-"}`)]));
+  info.appendChild(meta);
+  card.appendChild(info);
+
+  // Action button
+  const actionWrap = el("div", { class: "teacher-card-action" });
+
+  // Check if already related
+  const isStudent = await getDoc(doc(db, "studentTeachers", currentStudentProfile.uid, "teachers", teacher.uid));
+  if (isStudent.exists()) {
+    const badge = el("span", { class: "badge badge-approved", text: "منضم" });
+    actionWrap.appendChild(badge);
+  } else {
+    // Check pending request
+    const reqSnap = await getDocs(query(
+      collection(db, "studentRequests"),
+      where("studentUid", "==", currentStudentProfile.uid),
+      where("teacherUid", "==", teacher.uid),
+      orderBy("createdAt", "desc"),
+      limit(1)
+    ));
+
+    let canSend = true;
+    if (!reqSnap.empty) {
+      const last = reqSnap.docs[0].data();
+      if (last.status === "pending") {
+        actionWrap.appendChild(el("span", { class: "badge badge-pending", text: "قيد المراجعة" }));
+        canSend = false;
+      } else if (last.status === "rejected" && last.respondedAt) {
+        const dt = last.respondedAt.toDate ? last.respondedAt.toDate() : new Date(last.respondedAt);
+        const days = (Date.now() - dt.getTime()) / (1000 * 60 * 60 * 24);
+        if (days < SYSTEM_LIMITS.STUDENT_REQUEST_COOLDOWN_DAYS) {
+          const remain = Math.ceil(SYSTEM_LIMITS.STUDENT_REQUEST_COOLDOWN_DAYS - days);
+          const badge = el("span", { class: "badge badge-rejected", text: `مرفوض (${remain} يوم)` });
+          actionWrap.appendChild(badge);
+          canSend = false;
+        }
+      }
+    }
+
+    if (canSend) {
+      const sendBtn = el("button", { class: "btn btn-primary btn-sm", type: "button" });
+      sendBtn.appendChild(svgIcon("send", 14));
+      sendBtn.appendChild(document.createTextNode(" إرسال طلب"));
+      sendBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        sendBtn.classList.add("is-loading");
+        try {
+          await sendStudentRequest(currentStudentProfile.uid, teacher.uid);
+          toast("تم إرسال الطلب", "success");
+          renderStudentTeachers();
+        } catch (err) {
+          if (err.message === "MAX_TEACHERS") {
+            toast("وصلت للحد الأقصى (100 معلم)", "error");
+          } else if (err.message === "COOLDOWN") {
+            toast(`انتظر ${err.daysRemaining} يوم قبل المحاولة`, "warning");
+          } else if (err.message === "REQUEST_PENDING") {
+            toast("الطلب قيد المراجعة", "info");
+          } else {
+            toast("تعذّر إرسال الطلب", "error");
+          }
+          sendBtn.classList.remove("is-loading");
+        }
+      });
+      actionWrap.appendChild(sendBtn);
+    }
+  }
+
+  card.appendChild(actionWrap);
+  return card;
+}
+
+/* ============================================================
+   STUDENT: MASTER EXAMS
+   ============================================================ */
+async function renderStudentMasters() {
+  const list = $("[data-master-exams-list]");
+  const empty = $("[data-master-exams-empty]");
+  if (!list) return;
+
+  list.innerHTML = "";
+  list.appendChild(el("div", { class: "sk-card" }, [el("div", { class: "skeleton sk-line sk-lg" })]));
+
+  $$("[data-master-tab]").forEach((tab) => {
+    if (tab.dataset.bound) return;
+    tab.dataset.bound = "1";
+    tab.addEventListener("click", () => {
+      $$("[data-master-tab]").forEach((t) => t.classList.toggle("is-active", t === tab));
+      renderStudentMasters();
+    });
+  });
+
+  const activeTab = $(".master-tab.is-active")?.dataset.masterTab || "available";
+
+  const teachers = await listMyTeachers(currentStudentProfile.uid);
+  const exams = await listUpcomingExamsForStudent(teachers);
+
+  let filtered = exams;
+  if (activeTab === "available") filtered = exams.filter((e) => computeStatus(e) === "active");
+  else filtered = exams.filter((e) => computeStatus(e) === "scheduled");
+
+  list.innerHTML = "";
+  if (!filtered.length) {
+    if (empty) empty.hidden = false;
+    return;
+  }
+  if (empty) empty.hidden = true;
+  filtered.forEach((exam) => list.appendChild(buildStudentExamCard(exam)));
+}
+
+/* ============================================================
+   STUDENT: HISTORY
+   ============================================================ */
+async function renderStudentHistory() {
+  const list = $("[data-history-list]");
+  const empty = $("[data-history-empty]");
+  if (!list) return;
+
+  list.innerHTML = "";
+  list.appendChild(el("div", { class: "sk-card" }, [el("div", { class: "skeleton sk-line sk-lg" })]));
+
+  const history = await listStudentHistory(currentStudentProfile.uid);
+
+  const search = $("[data-history-search]");
+  if (search && !search.dataset.bound) {
+    search.dataset.bound = "1";
+    search.addEventListener("input", debounce(() => {
+      renderStudentHistoryList(history, search.value.trim().toLowerCase());
+    }, 200));
+  }
+
+  renderStudentHistoryList(history, "");
+}
+
+function renderStudentHistoryList(history, query) {
+  const list = $("[data-history-list]");
+  const empty = $("[data-history-empty]");
+  if (!list) return;
+
+  let filtered = history;
+  if (query) {
+    filtered = history.filter((h) => {
+      const title = (h.exam?.title || "").toLowerCase();
+      return title.includes(query);
+    });
+  }
+
+  list.innerHTML = "";
+  if (!filtered.length) {
+    if (empty) empty.hidden = false;
+    return;
+  }
+  if (empty) empty.hidden = true;
+
+  filtered.forEach((item) => {
+    const exam = item.exam;
+    if (!exam) return;
+
+    const card = el("div", { class: "history-card" });
+    const info = el("div", { class: "history-card-info" });
+    info.appendChild(el("div", { class: "history-card-title", text: exam.title || "بدون اسم" }));
+    const meta = el("div", { class: "history-card-meta" });
+    meta.appendChild(el("span", {}, [svgIcon("user", 12), document.createTextNode(` ${exam.teacherName || "-"}`)]));
+    meta.appendChild(el("span", {}, [svgIcon("clock", 12), document.createTextNode(` ${fmtDateShort(item.submittedAt || item.createdAt)}`)]));
+    info.appendChild(meta);
+    card.appendChild(info);
+
+    const scoreWrap = el("div", { class: "history-card-score" });
+    if (item.status === "graded" && item.score != null) {
+      scoreWrap.appendChild(el("div", { class: "history-score-value", text: String(item.score) }));
+      const total = exam.totalScore || 0;
+      scoreWrap.appendChild(el("div", { class: "history-score-label", text: `/ ${total}` }));
+    } else {
+      scoreWrap.appendChild(el("div", { class: "history-score-label", text: statusLabel(item.status) }));
+    }
+    card.appendChild(scoreWrap);
+
+    card.addEventListener("click", () => {
+      sessionStorage.setItem("qeyasquiz.lastAttempt", item.id);
+      localStorage.setItem("qeyasquiz.lastAttempt", item.id);
+      navigate("/result");
+    });
+
+    list.appendChild(card);
+  });
+}
+
+/* ============================================================
+   STUDENT: JOIN ROOM
+   ============================================================ */
+const ROOM_HISTORY_KEY = "qeyasquiz.roomHistory";
+
+async function renderStudentJoin() {
+  const form = $("[data-room-form]");
+  const input = $("[data-room-input]");
+  const errorBox = $("[data-room-error]");
+  const errorText = $("[data-room-error-text]");
+
+  // Load history
+  const history = JSON.parse(localStorage.getItem(ROOM_HISTORY_KEY) || "[]");
+  const historyWrap = $("[data-room-history]");
+  const historyList = $("[data-room-history-list]");
+  if (historyWrap && historyList && history.length) {
+    historyWrap.hidden = false;
+    historyList.innerHTML = "";
+    history.forEach((code) => {
+      const chip = el("button", { type: "button", class: "chip", text: formatRoomCode(code) });
+      chip.addEventListener("click", () => {
+        input.value = formatRoomCode(code);
+        input.focus();
+      });
+      historyList.appendChild(chip);
+    });
+  }
+
+  if (!form || form.dataset.bound) return;
+  form.dataset.bound = "1";
+
+  // Auto-format input
+  input.addEventListener("input", () => {
+    const clean = normalizeRoomCode(input.value);
+    if (clean.length > SYSTEM_LIMITS.ROOM_CODE_LENGTH) {
+      input.value = formatRoomCode(clean.slice(0, SYSTEM_LIMITS.ROOM_CODE_LENGTH));
+    } else {
+      const before = input.value;
+      const formatted = formatRoomCode(clean);
+      if (before !== formatted && input.value === before) {
+        // Only reformat if user isn't in the middle of typing a dash
+        input.value = formatted;
+      }
+    }
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (errorBox) errorBox.hidden = true;
+
+    const raw = normalizeRoomCode(input.value);
+    if (raw.length !== SYSTEM_LIMITS.ROOM_CODE_LENGTH) {
+      if (errorBox) errorBox.hidden = false;
+      if (errorText) errorText.textContent = "الكود لازم 12 حرف أو رقم";
+      return;
+    }
+
+    const submitBtn = $("[data-room-submit]");
+    submitBtn.classList.add("is-loading");
+
+    try {
+      const room = await findExamByRoomCode(raw);
+      if (!room) {
+        if (errorBox) errorBox.hidden = false;
+        if (errorText) errorText.textContent = "الكود غير صحيح";
+        submitBtn.classList.remove("is-loading");
+        return;
+      }
+
+      if (!room.active) {
+        if (errorBox) errorBox.hidden = false;
+        if (errorText) errorText.textContent = "الامتحان غير نشط حاليا";
+        submitBtn.classList.remove("is-loading");
+        return;
+      }
+
+      if (room.expiresAt) {
+        const exp = room.expiresAt.toDate ? room.expiresAt.toDate() : new Date(room.expiresAt);
+        if (exp.getTime() < Date.now()) {
+          if (errorBox) errorBox.hidden = false;
+          if (errorText) errorText.textContent = "انتهت صلاحية الكود";
+          submitBtn.classList.remove("is-loading");
+          return;
+        }
+      }
+
+      // Save to history
+      const existing = JSON.parse(localStorage.getItem(ROOM_HISTORY_KEY) || "[]");
+      const updated = [raw, ...existing.filter((c) => c !== raw)].slice(0, 5);
+      localStorage.setItem(ROOM_HISTORY_KEY, JSON.stringify(updated));
+
+      navigate(`/exam?id=${room.examId}`);
+    } catch (err) {
+      console.error(err);
+      if (errorBox) errorBox.hidden = false;
+      if (errorText) errorText.textContent = "تعذّر البحث - حاول مرة أخرى";
+      submitBtn.classList.remove("is-loading");
+    }
+  });
+}
+
+/* ============================================================
+   TEACHER: EXAM BUILDER
    ============================================================ */
 const BUILDER_STEPS = ["info", "questions", "forms", "settings"];
 
@@ -1763,8 +2778,7 @@ let builderState = {
     title: "", subject: "", grade: "", duration: 60,
     startAt: null, endAt: null,
     displayMode: "scroll",
-    shuffleQuestions: false, requireAccessCode: false, accessCode: "",
-    requireFullscreen: true,
+    shuffleQuestions: false,
     forms: [{ id: "A", name: "النموذج أ", questions: [] }]
   }
 };
@@ -1808,8 +2822,7 @@ async function renderBuilder(params) {
       title: "", subject: "", grade: "", duration: 60,
       startAt: null, endAt: null,
       displayMode: "scroll",
-      shuffleQuestions: false, requireAccessCode: false, accessCode: "",
-      requireFullscreen: true,
+      shuffleQuestions: false,
       forms: [{ id: "A", name: "النموذج أ", questions: [] }]
     };
   }
@@ -1823,16 +2836,14 @@ function renderBuilderUI() {
   setVal("#examTitle", d.title);
   setVal("#examGrade", d.grade);
   setVal("#examDuration", d.duration || 60);
-  setVal("#examAccessCode", d.accessCode);
   setVal("#examStart", toLocalInput(d.startAt));
   setVal("#examEnd", toLocalInput(d.endAt));
 
   const subjSel = $("#examSubject");
   if (subjSel) {
     subjSel.innerHTML = `<option value="">اختر المادة</option>`;
-    (currentProfile?.subjects || []).forEach((sid) => {
-      const label = sid.startsWith("custom:") ? sid.slice(7) : subjectLabel(sid);
-      subjSel.appendChild(el("option", { value: sid, text: label }));
+    SUBJECTS.forEach((s) => {
+      subjSel.appendChild(el("option", { value: s.id, text: s.ar }));
     });
     subjSel.value = d.subject || "";
   }
@@ -1845,8 +2856,6 @@ function renderBuilderUI() {
 
   const setChk = (sel, v) => { const e = $(sel); if (e) e.checked = !!v; };
   setChk('[data-field="shuffleQuestions"]', d.shuffleQuestions);
-  setChk('[data-field="requireAccessCode"]', d.requireAccessCode);
-  setChk('[data-field="requireFullscreen"]', d.requireFullscreen);
 
   renderBuilderQuestions();
   renderBuilderForms();
@@ -1998,10 +3007,7 @@ function buildQuestionCard(q, idx) {
     } catch (err) {
       console.error("[saveQuestion]", err);
       q._error = true; updateCardStatus();
-      const reason = err?.message === "Could not create exam"
-        ? "تعذّر إنشاء مسودة الامتحان — جرب تحفظ الكل أولاً"
-        : err?.message || "خطأ في الشبكة";
-      toast(`فشل حفظ السؤال ${idx + 1}: ${reason}`, "error", 6000);
+      toast(`فشل حفظ السؤال ${idx + 1}`, "error", 6000);
     } finally { saveBtn.classList.remove("is-loading"); }
   });
 
@@ -2018,18 +3024,17 @@ function buildQuestionCard(q, idx) {
   headerField.appendChild(headerLabel);
   const headerInput = el("input", {
     type: "text", class: "input", maxlength: "200",
-    placeholder: "مثال: بم تفسر، أعرب كلمة، اذكر السبب، اختر الإجابة الصحيحة…"
+    placeholder: "مثال: بم تفسر، أعرب كلمة، اذكر السبب..."
   });
   headerInput.value = q.header || "";
   headerInput.addEventListener("input", () => { q.header = headerInput.value; markQuestionUnsaved(); markDirty(); });
   headerField.appendChild(headerInput);
-  headerField.appendChild(el("p", { class: "field-hint", text: "يظهر للطالب قبل نص السؤال — يوضح هدف السؤال." }));
   body.appendChild(headerField);
 
   const textField = el("div", { class: "field" });
   textField.appendChild(el("label", { class: "field-label", text: "نص السؤال" }));
   const ta = el("textarea", { class: "textarea" });
-  ta.placeholder = "اكتب نص السؤال…";
+  ta.placeholder = "اكتب نص السؤال...";
   ta.value = q.text || "";
   ta.addEventListener("input", () => { q.text = ta.value; markQuestionUnsaved(); markDirty(); });
   textField.appendChild(ta);
@@ -2042,7 +3047,7 @@ function buildQuestionCard(q, idx) {
     const f = fileInput.files?.[0];
     if (!f) return;
     try {
-      toast("جارٍ الرفع…", "info", 2000);
+      toast("جارٍ الرفع...", "info", 2000);
       const url = await uploadQuestionImage(builderState.examId, f);
       q.imageUrl = url;
       markQuestionUnsaved(); renderBuilderQuestions(); markDirty();
@@ -2110,7 +3115,6 @@ function buildQuestionCard(q, idx) {
       const jField = el("div", { class: "field mt-3" });
       jField.appendChild(el("label", { class: "field-label", text: "الإجابة النموذجية للتبرير" }));
       const jTa = el("textarea", { class: "textarea" });
-      jTa.placeholder = "اكتب التبرير المثالي المتوقع من الطالب…";
       jTa.value = q.justificationModelAnswer || "";
       jTa.addEventListener("input", () => { q.justificationModelAnswer = jTa.value; markQuestionUnsaved(); markDirty(); });
       jField.appendChild(jTa);
@@ -2135,7 +3139,6 @@ function buildQuestionCard(q, idx) {
       const jField = el("div", { class: "field mt-3" });
       jField.appendChild(el("label", { class: "field-label", text: "الإجابة النموذجية للتبرير" }));
       const jTa = el("textarea", { class: "textarea" });
-      jTa.placeholder = "اكتب التبرير المثالي المتوقع من الطالب…";
       jTa.value = q.justificationModelAnswer || "";
       jTa.addEventListener("input", () => { q.justificationModelAnswer = jTa.value; markQuestionUnsaved(); markDirty(); });
       jField.appendChild(jTa);
@@ -2165,7 +3168,6 @@ function buildQuestionCard(q, idx) {
   const explanationField = el("div", { class: "field" });
   explanationField.appendChild(el("label", { class: "field-label", text: "الشرح (اختياري)" }));
   const expTa = el("textarea", { class: "textarea" });
-  expTa.placeholder = "اشرح الإجابة الصحيحة للطالب… (يظهر في صفحة النتيجة)";
   expTa.value = q.explanation || "";
   expTa.addEventListener("input", () => { q.explanation = expTa.value; markQuestionUnsaved(); markDirty(); });
   explanationField.appendChild(expTa);
@@ -2192,11 +3194,8 @@ function buildQuestionCard(q, idx) {
   return card;
 }
 
-/* ============================================================
-   VALIDATION + SAVE
-   ============================================================ */
 function validateSingleQuestion(q) {
-  if (!q.header || !q.header.trim()) return "أدخل رأس السؤال (هدف السؤال)";
+  if (!q.header || !q.header.trim()) return "أدخل رأس السؤال";
   if (!q.text || !q.text.trim()) return "أدخل نص السؤال";
 
   if (q.type === "mcq" || q.type === "mcq_just") {
@@ -2204,11 +3203,11 @@ function validateSingleQuestion(q) {
     const filled = opts.filter((o) => o && o.trim());
     if (filled.length < 2) return "أدخل خيارين على الأقل";
     if (q.correctIndex == null || q.correctIndex >= opts.length) return "اختر الإجابة الصحيحة";
-    if (!opts[q.correctIndex] || !opts[q.correctIndex].trim()) return "الإجابة الصحيحة فاضية";
+    if (!opts[q.correctIndex] || !opts[q.correctIndex].trim()) return "الإجابة الصحيحة فارغة";
   }
 
   if (q.type === "tf" || q.type === "tf_just") {
-    if (q.correctBool == null) return "اختر الإجابة الصحيحة (صح / خطأ)";
+    if (q.correctBool == null) return "اختر الإجابة الصحيحة";
   }
 
   if (q.type === "complete") {
@@ -2328,9 +3327,6 @@ async function autosaveBuilderNow() {
     endAt: d.endAt instanceof Timestamp ? d.endAt : (d.endAt ? Timestamp.fromDate(new Date(d.endAt)) : null),
     displayMode: d.displayMode || "scroll",
     shuffleQuestions: !!d.shuffleQuestions,
-    requireAccessCode: !!d.requireAccessCode,
-    accessCode: d.requireAccessCode ? (d.accessCode || "") : "",
-    requireFullscreen: d.requireFullscreen !== false,
     forms: cleanForms,
     questions: cleanForms[0]?.questions || [],
     totalQuestions: allQuestions.length,
@@ -2405,11 +3401,11 @@ function deleteQuestion(idx) {
 function showQuestionTypeModal() {
   const types = [
     { type: "mcq", title: "اختيار من متعدد", hint: "إجابة واحدة صحيحة" },
-    { type: "mcq_just", title: "اختيار + تبرير", hint: "اختيار مع كتابة تبرير (تصحيح يدوي/AI)" },
+    { type: "mcq_just", title: "اختيار + تبرير", hint: "اختيار مع كتابة تبرير" },
     { type: "tf", title: "صح / خطأ", hint: "عبارة صح أو خطأ" },
-    { type: "tf_just", title: "صح / خطأ + تبرير", hint: "صح أو خطأ مع تبرير (تصحيح يدوي/AI)" },
+    { type: "tf_just", title: "صح / خطأ + تبرير", hint: "صح أو خطأ مع تبرير" },
     { type: "complete", title: "أكمل", hint: "إكمال الفراغ" },
-    { type: "essay", title: "مقالي", hint: "إجابة طويلة (تصحيح يدوي/AI)" }
+    { type: "essay", title: "مقالي", hint: "إجابة طويلة" }
   ];
 
   const body = el("div", { class: "stack-sm" });
@@ -2482,7 +3478,7 @@ function removeForm(idx) {
 
 function markDirty() {
   const state = $("[data-builder-save-state]");
-  if (state) state.textContent = "جارٍ الحفظ…";
+  if (state) state.textContent = "جارٍ الحفظ...";
   autosaveBuilder();
 }
 
@@ -2507,9 +3503,6 @@ const autosaveBuilder = debounce(async () => {
     endAt: d.endAt instanceof Timestamp ? d.endAt : (d.endAt ? Timestamp.fromDate(new Date(d.endAt)) : null),
     displayMode: d.displayMode || "scroll",
     shuffleQuestions: !!d.shuffleQuestions,
-    requireAccessCode: !!d.requireAccessCode,
-    accessCode: d.requireAccessCode ? (d.accessCode || "") : "",
-    requireFullscreen: d.requireFullscreen !== false,
     forms: cleanForms,
     questions: cleanForms[0]?.questions || [],
     totalQuestions: allQuestions.length,
@@ -2560,7 +3553,7 @@ async function saveAllQuestions() {
       body: el("ul", { style: "padding-inline-start:20px;line-height:2;max-height:300px;overflow-y:auto" },
         errors.slice(0, 15).map((e) => el("li", { text: e, style: "font-size:var(--fs-sm)" }))
       ),
-      actions: [{ label: "حسنًا", class: "btn-primary" }]
+      actions: [{ label: "حسنا", class: "btn-primary" }]
     });
     return;
   }
@@ -2589,26 +3582,30 @@ async function publishExam() {
   if (!d.subject) errors.push("المادة مطلوبة");
   if (!d.grade) errors.push("الصف مطلوب");
   const totalQ = getAllBuilderQuestions().length;
-  if (!totalQ) errors.push("أضف سؤالاً واحدًا على الأقل");
+  if (!totalQ) errors.push("أضف سؤالا واحدا على الأقل");
 
   const unsaved = getAllBuilderQuestions().filter((q) => !q._saved);
-  if (unsaved.length) errors.push(`فيه ${unsaved.length} سؤال مش محفوظ. اضغط "حفظ الكل" الأول.`);
+  if (unsaved.length) errors.push(`فيه ${unsaved.length} سؤال غير محفوظ. اضغط "حفظ الكل" أولا.`);
 
   if (errors.length) {
     openModal({
       title: `${errors.length} ${errors.length === 1 ? "مشكلة" : "مشاكل"}`,
       body: el("ul", { style: "padding-inline-start:20px;line-height:2" }, errors.map((e) => el("li", { text: e }))),
-      actions: [{ label: "حسنًا", class: "btn-primary" }]
+      actions: [{ label: "حسنا", class: "btn-primary" }]
     });
     return;
   }
+
+  const roomCode = generateRoomCode();
+  const formatted = formatRoomCode(roomCode);
 
   const summary = el("div", { class: "stack-sm" });
   [
     ["الاسم", d.title],
     ["الأسئلة", String(totalQ)],
     ["النماذج", String(d.forms.length)],
-    ["المدة", `${d.duration} دقيقة`]
+    ["المدة", `${d.duration} دقيقة`],
+    ["كود الغرفة", formatted]
   ].forEach(([k, v]) => {
     summary.appendChild(el("div", { class: "row-between" }, [el("span", { text: k }), el("strong", { text: v })]));
   });
@@ -2621,25 +3618,35 @@ async function publishExam() {
       { label: "نشر", class: "btn-primary", onClick: async () => {
         try {
           await saveAllQuestions();
-          await new Promise((r) => setTimeout(r, 400));
+          await new Promise((r) => setTimeout(r, 600));
 
           const answersSnap = await getDoc(doc(db, "examAnswers", builderState.examId));
           if (!answersSnap.exists()) throw new Error("answers not saved");
-          const savedAnswers = answersSnap.data().answers || {};
-          const requiredIds = getAllBuilderQuestions().map((q) => q.id);
-          const missing = requiredIds.filter((id) => !savedAnswers[id]);
-          if (missing.length) { toast(`فيه ${missing.length} سؤال مش محفوظ.`, "warning"); return false; }
 
-          await updateDoc(doc(db, "exams", builderState.examId), {
+          const expiresAt = d.endAt instanceof Timestamp ? d.endAt : (d.endAt ? Timestamp.fromDate(new Date(d.endAt)) : null);
+
+          const batch = writeBatch(db);
+          batch.update(doc(db, "exams", builderState.examId), {
             status: "scheduled",
-            publishedAt: serverTimestamp()
+            publishedAt: serverTimestamp(),
+            roomCode,
+            roomCodeActive: true,
+            roomCodeExpiresAt: expiresAt
           });
+          batch.set(doc(db, "examRoomCodes", roomCode), {
+            examId: builderState.examId,
+            teacherUid: currentProfile.uid,
+            active: true,
+            expiresAt,
+            createdAt: serverTimestamp()
+          });
+          await batch.commit();
+
           toast("تم نشر الامتحان", "success");
           navigate(`/app/exam?id=${builderState.examId}`);
         } catch (err) {
           console.error(err);
-          const reason = err?.code === "permission-denied" ? "ليس لديك صلاحية" : err?.message || "خطأ في الشبكة";
-          toast(`فشل النشر: ${reason}`, "error", 6000);
+          toast(`فشل النشر: ${err.message || "خطأ"}`, "error", 6000);
         }
       }}
     ]
@@ -2671,7 +3678,7 @@ function initBuilderEvents() {
           if (!d.grade) { toast("اختر الصف", "warning"); return; }
         }
         if (builderState.currentStep === "questions" && !getAllBuilderQuestions().length) {
-          toast("أضف سؤالاً واحدًا على الأقل", "warning"); return;
+          toast("أضف سؤالا واحدا على الأقل", "warning"); return;
         }
         switchBuilderStep(BUILDER_STEPS[idx + 1]);
       }
@@ -2691,7 +3698,7 @@ function initBuilderEvents() {
     if (e.target.closest("[data-builder-cancel]")) { navigate("/app/exams"); return; }
 
     if (e.target.closest("[data-builder-preview]")) {
-      if (!builderState.examId) { toast("احفظ أولاً", "warning"); return; }
+      if (!builderState.examId) { toast("احفظ أولا", "warning"); return; }
       window.open(location.pathname + `#/exam?id=${builderState.examId}&preview=1`, "_blank");
       return;
     }
@@ -2711,7 +3718,6 @@ function initBuilderEvents() {
     else if (f === "subject") d.subject = e.target.value;
     else if (f === "grade") d.grade = e.target.value;
     else if (f === "duration") d.duration = Number(e.target.value) || 60;
-    else if (f === "accessCode") d.accessCode = e.target.value;
     else if (f === "startAt") d.startAt = fromLocalInput(e.target.value);
     else if (f === "endAt") d.endAt = fromLocalInput(e.target.value);
     markDirty();
@@ -2734,7 +3740,7 @@ function initBuilderEvents() {
 }
 
 /* ============================================================
-   EXAM DETAILS + QUICK REPORT
+   EXAM DETAILS
    ============================================================ */
 async function renderExamDetails(params) {
   const examId = params?.get("id") || currentParams?.get("id");
@@ -2761,47 +3767,22 @@ async function renderExamDetails(params) {
   left.appendChild(el("h2", { class: "exam-details-title", text: exam.title || "بدون اسم" }));
   left.appendChild(el("div", {
     class: "exam-details-meta",
-    text: `${subjectLabel(exam.subject)} · ${gradeLabel(exam.grade)} · ${exam.totalQuestions || 0} سؤال · ${exam.duration || 0} دقيقة`
+    text: `${subjectLabel(exam.subject)} - ${gradeLabel(exam.grade)} - ${exam.totalQuestions || 0} سؤال - ${exam.duration || 0} دقيقة`
   }));
   head.appendChild(left);
 
   const actions = el("div", { class: "row" });
   actions.appendChild(el("span", { class: `badge badge-${status}`, text: statusLabel(status) }));
 
-  if (exam.publishedAt) {
-    const toggleWrap = el("label", { class: "exam-status-toggle" });
-    const toggleInput = el("input", { type: "checkbox" });
-    toggleInput.checked = exam.manualStatus !== "paused";
-    toggleInput.addEventListener("change", async () => {
-      const newStatus = toggleInput.checked ? "active" : "paused";
-      try {
-        await updateDoc(doc(db, "exams", exam.id), {
-          manualStatus: newStatus === "active" ? null : "paused",
-          updatedAt: serverTimestamp()
-        });
-        toast(newStatus === "active" ? "تم تفعيل الامتحان" : "تم إيقاف الامتحان", "success");
-        renderExamDetails(currentParams);
-      } catch {
-        toast("تعذّر التحديث", "error");
-        toggleInput.checked = !toggleInput.checked;
-      }
-    });
-    const track = el("span", { class: "exam-status-toggle-track" }, [
-      el("span", { class: "exam-status-toggle-thumb" })
-    ]);
-    toggleWrap.appendChild(toggleInput);
-    toggleWrap.appendChild(track);
-    toggleWrap.appendChild(el("span", { text: exam.manualStatus === "paused" ? "متوقف" : "نشط" }));
-    actions.appendChild(toggleWrap);
-  }
+  const shareBtn = el("button", { class: "btn btn-primary btn-sm", type: "button" });
+  shareBtn.appendChild(svgIcon("door-open", 14));
+  shareBtn.appendChild(document.createTextNode(" كود الغرفة"));
+  shareBtn.addEventListener("click", () => shareRoomCode(exam));
+  actions.appendChild(shareBtn);
 
   const editBtn = el("button", { class: "btn btn-outline btn-sm", type: "button", text: "تعديل" });
   editBtn.addEventListener("click", () => navigate(`/app/builder?id=${examId}`));
   actions.appendChild(editBtn);
-
-  const shareBtn = el("button", { class: "btn btn-outline btn-sm", type: "button", text: "مشاركة" });
-  shareBtn.addEventListener("click", () => shareExam(exam));
-  actions.appendChild(shareBtn);
 
   head.appendChild(actions);
   host.appendChild(head);
@@ -2809,10 +3790,6 @@ async function renderExamDetails(params) {
   if (attempts.length) {
     const report = await buildQuickReport(exam, attempts);
     host.appendChild(report);
-  }
-
-  if (shouldShowLeaderboard(exam, attempts)) {
-    host.appendChild(buildLeaderboard(exam, attempts));
   }
 
   const tabs = el("div", { class: "exam-tabs" });
@@ -2854,7 +3831,7 @@ async function buildQuickReport(exam, attempts) {
   participantsItem.appendChild(el("span", { class: "quick-report-value", text: String(attempts.length) }));
   participantsItem.appendChild(el("span", {
     class: "quick-report-sub",
-    text: `${submitted.length} سلّموا · ${inProgress.length} داخل الامتحان`
+    text: `${submitted.length} سلّموا - ${inProgress.length} داخل الامتحان`
   }));
   report.appendChild(participantsItem);
 
@@ -2871,15 +3848,8 @@ async function buildQuickReport(exam, attempts) {
     const highItem = el("div", { class: "quick-report-item" });
     highItem.appendChild(el("span", { class: "quick-report-label", text: "أعلى درجة" }));
     highItem.appendChild(el("span", { class: "quick-report-value", text: String(highest.score || 0) }));
-    highItem.appendChild(el("span", { class: "quick-report-sub", text: highest.studentName || "—" }));
+    highItem.appendChild(el("span", { class: "quick-report-sub", text: highest.studentName || "-" }));
     report.appendChild(highItem);
-
-    const lowest = graded.reduce((worst, a) => (Number(a.score) || 0) < (Number(worst.score) || 0) ? a : worst, graded[0]);
-    const lowItem = el("div", { class: "quick-report-item is-danger" });
-    lowItem.appendChild(el("span", { class: "quick-report-label", text: "أقل درجة" }));
-    lowItem.appendChild(el("span", { class: "quick-report-value", text: String(lowest.score || 0) }));
-    lowItem.appendChild(el("span", { class: "quick-report-sub", text: lowest.studentName || "—" }));
-    report.appendChild(lowItem);
   }
 
   return report;
@@ -2889,7 +3859,7 @@ function renderStudentsTab(host, exam, attempts) {
   if (!attempts.length) {
     host.appendChild(el("div", { class: "empty" }, [
       el("h3", { text: "لا يوجد طلاب بعد" }),
-      el("p", { text: "شارك رابط الامتحان للبدء." })
+      el("p", { text: "شارك كود الغرفة مع طلابك للبدء." })
     ]));
     return;
   }
@@ -2897,20 +3867,9 @@ function renderStudentsTab(host, exam, attempts) {
   const toolbar = el("div", { class: "row-between", style: "margin-bottom:var(--sp-3);gap:var(--sp-3);flex-wrap:wrap" });
 
   const pendingCount = attempts.filter((a) => a.status === "submitted").length;
-  const allGraded = attempts.length > 0 && attempts.every((a) => a.gradedAt);
-  const isPublished = !!exam.resultPublishedAt;
-  const hasEssays = getAllExamQuestions(exam).some(isEssay);
-
-  const infoEl = el("div", { class: "text-sm text-muted" });
-  if (isPublished) infoEl.textContent = "النتائج منشورة للطلاب";
-  else if (allGraded) infoEl.textContent = "كل الأوراق مصححة — جاهزة للنشر";
-  else if (pendingCount > 0) infoEl.textContent = `فيه ${pendingCount} ورقة بانتظار التصحيح`;
-  else infoEl.textContent = "";
-  toolbar.appendChild(infoEl);
 
   const actionsWrap = el("div", { class: "row", style: "gap:var(--sp-2)" });
 
-  /* ===== زر 1: تصحيح الكل (اختيار / صح-خطأ / أكمل) ===== */
   const gradeAllBtn = el("button", {
     type: "button",
     class: "btn btn-outline btn-sm",
@@ -2918,27 +3877,20 @@ function renderStudentsTab(host, exam, attempts) {
   });
   gradeAllBtn.appendChild(svgIcon("check", 14));
   gradeAllBtn.appendChild(document.createTextNode(" تصحيح الكل"));
-  gradeAllBtn.title = "تصحيح الأسئلة الموضوعية (اختيار / صح-خطأ / أكمل)";
   gradeAllBtn.addEventListener("click", async () => {
     if (pendingCount === 0) return;
     gradeAllBtn.classList.add("is-loading");
     try {
       const result = await autoGradeAttempts(exam.id, exam);
       if (result.noAnswerKey) {
-        toast("مفيش إجابات نموذجية محفوظة — احفظ إجابات الأسئلة أولاً", "error", 6000);
+        toast("لا يوجد إجابات نموذجية محفوظة", "error", 6000);
         return;
       }
       if (result.alreadyDone) {
         toast("كل الأوراق مصححة بالفعل", "info");
         return;
       }
-      if (result.graded > 0 && result.pendingManual === 0) {
-        toast(`تم تصحيح ${result.graded} ورقة`, "success");
-      } else if (result.graded > 0 && result.pendingManual > 0) {
-        toast(`تم تصحيح ${result.graded} ورقة، و${result.pendingManual} ورقة فيها مقالات محتاجة AI`, "warning", 7000);
-      } else if (result.pendingManual > 0) {
-        toast(`كل الأوراق فيها مقالات — استخدم "تصحيح الكل بالـ AI"`, "info", 7000);
-      }
+      if (result.graded > 0) toast(`تم تصحيح ${result.graded} ورقة`, "success");
       renderExamDetails(currentParams);
     } catch (err) {
       console.error(err);
@@ -2949,84 +3901,36 @@ function renderStudentsTab(host, exam, attempts) {
   });
   actionsWrap.appendChild(gradeAllBtn);
 
-  /* ===== زر 2: تصحيح الكل بالـ AI ===== */
-  if (hasEssays) {
-    const aiGradeBtn = el("button", {
-      type: "button",
-      class: "btn btn-gold btn-sm",
-      disabled: pendingCount === 0
-    });
-    aiGradeBtn.appendChild(svgIcon("sparkles", 14));
-    aiGradeBtn.appendChild(document.createTextNode(" تصحيح الكل بالـ AI"));
-    aiGradeBtn.title = "تصحيح المقالي بالـ AI — الأسئلة الموضوعية تُصحح تلقائيًا بدون كريدت";
-    aiGradeBtn.addEventListener("click", () => runAIGradeAll(exam, attempts));
-    actionsWrap.appendChild(aiGradeBtn);
-  }
-
-  /* ===== زر 3: نشر للكل ===== */
-  const publishAllBtn = el("button", {
-    type: "button",
-    class: "btn btn-success btn-sm",
-    disabled: !allGraded || isPublished
-  });
-  publishAllBtn.appendChild(svgIcon("award", 14));
-  publishAllBtn.appendChild(document.createTextNode(" نشر للكل"));
-  publishAllBtn.title = isPublished ? "النتائج منشورة بالفعل" : (!allGraded ? "لازم تصحح كل الأوراق الأول" : "نشر النتائج للطلاب");
-  publishAllBtn.addEventListener("click", async () => {
-    if (!allGraded || isPublished) return;
-    publishAllBtn.classList.add("is-loading");
-    try {
-      await updateDoc(doc(db, "exams", exam.id), {
-        resultPublishedAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      });
-      toast("تم نشر النتائج للطلاب", "success");
-      renderExamDetails(currentParams);
-    } catch (err) {
-      console.error(err);
-      toast("فشل النشر", "error");
-    } finally {
-      publishAllBtn.classList.remove("is-loading");
-    }
-  });
-  actionsWrap.appendChild(publishAllBtn);
-
+  toolbar.appendChild(el("div", { class: "text-sm text-muted", text: pendingCount > 0 ? `فيه ${pendingCount} ورقة بانتظار التصحيح` : "" }));
   toolbar.appendChild(actionsWrap);
   host.appendChild(toolbar);
 
   const wrap = el("div", { class: "card", style: "overflow-x:auto" });
   const table = el("table", { class: "students-table" });
   table.innerHTML = `<thead><tr>
-    <th>الطالب</th><th>الحالة</th><th>البدء</th><th>التسليم</th><th>الدرجة</th>
-    <th>الأحداث</th><th>التفاصيل</th>
+    <th>الطالب</th><th>الحالة</th><th>البدء</th><th>التسليم</th><th>الدرجة</th><th>الأحداث</th><th>التفاصيل</th>
   </tr></thead>`;
   const tbody = el("tbody");
   const totalPossible = exam.totalScore || 0;
 
   attempts.forEach((a) => {
     const tr = el("tr", { style: "cursor:pointer" });
-    tr.appendChild(el("td", { text: a.studentName || "—" }));
+    tr.appendChild(el("td", { text: a.studentName || "-" }));
     tr.appendChild(el("td", {}, [
       el("span", { class: `badge badge-${a.status || "draft"}`, text: statusLabel(a.status || "draft") })
     ]));
     tr.appendChild(el("td", { text: fmtDate(a.startedAt) }));
-    tr.appendChild(el("td", { text: a.submittedAt ? fmtDate(a.submittedAt) : "—" }));
-    tr.appendChild(el("td", { text: a.score != null ? `${a.score} / ${totalPossible}` : "—" }));
+    tr.appendChild(el("td", { text: a.submittedAt ? fmtDate(a.submittedAt) : "-" }));
+    tr.appendChild(el("td", { text: a.score != null ? `${a.score} / ${totalPossible}` : "-" }));
 
     const eventsCount = (a.anticheatEvents || []).length;
-    const warningsCount = (a.anticheatEvents || []).filter(
-      (e) => e.type === "tab_hidden" || e.type === "window_blur" || e.type === "fullscreen_exit"
-    ).length;
     const eventsTd = el("td");
     if (eventsCount === 0) eventsTd.appendChild(el("span", { class: "badge badge-graded", text: "نظيف" }));
-    else {
-      const badgeClass = warningsCount >= 3 ? "badge-paused" : warningsCount > 0 ? "badge-in_progress" : "badge-draft";
-      eventsTd.appendChild(el("span", { class: `badge ${badgeClass}`, text: `${eventsCount} حدث` }));
-    }
+    else eventsTd.appendChild(el("span", { class: "badge badge-in_progress", text: `${eventsCount} حدث` }));
     tr.appendChild(eventsTd);
 
     const detailsTd = el("td");
-    const detailsBtn = el("button", { type: "button", class: "btn btn-ghost btn-xs", title: "عرض تفاصيل الجلسة" });
+    const detailsBtn = el("button", { type: "button", class: "btn btn-ghost btn-xs" });
     detailsBtn.appendChild(svgIcon("eye", 14));
     detailsBtn.appendChild(document.createTextNode(" تفاصيل"));
     detailsBtn.addEventListener("click", (e) => { e.stopPropagation(); openAttemptDetails(a, exam); });
@@ -3050,16 +3954,16 @@ function renderQuestionsTab(host, exam) {
     const block = el("div", { class: "card" });
     block.appendChild(el("h3", {
       class: "builder-panel-title",
-      text: `${form.name} — ${(form.questions || []).length} سؤال`
+      text: `${form.name} - ${(form.questions || []).length} سؤال`
     }));
     (form.questions || []).forEach((q, i) => {
       const row = el("div", { class: "grading-card mt-3" });
       row.appendChild(el("div", { class: "row-between mb-2" }, [
-        el("span", { class: "fw-semibold", text: `س${i + 1} · ${qTypeLabel(q.type)}` }),
+        el("span", { class: "fw-semibold", text: `س${i + 1} - ${qTypeLabel(q.type)}` }),
         el("span", { class: "badge badge-draft", text: `${q.score} نقطة` })
       ]));
       if (q.header) row.appendChild(el("div", { class: "text-sm text-muted mb-2", text: q.header }));
-      row.appendChild(el("p", { text: q.text || "—" }));
+      row.appendChild(el("p", { text: q.text || "-" }));
       block.appendChild(row);
     });
     wrap.appendChild(block);
@@ -3089,7 +3993,7 @@ function renderGradingList(host, exam, attempts) {
 }
 
 /* ============================================================
-   AUTO-GRADE (MCQ / TF / Complete)
+   AUTO-GRADE
    ============================================================ */
 async function autoGradeAttempts(examId, exam) {
   const answersMap = await getExamAnswers(examId);
@@ -3107,14 +4011,12 @@ async function autoGradeAttempts(examId, exam) {
   const totalPossible = allQuestions.reduce((s, q) => s + (Number(q.score) || 0), 0);
 
   let gradedCount = 0;
-  let pendingManual = 0;
 
   for (const attempt of ungraded) {
     const answers = attempt.answers || {};
     let autoScore = 0;
     const perQ = {};
     let hasManual = false;
-    const manualQuestions = [];
 
     allQuestions.forEach((q) => {
       const a = answers[q.id] || {};
@@ -3131,7 +4033,6 @@ async function autoGradeAttempts(examId, exam) {
 
       if (!hasKey) {
         hasManual = true;
-        manualQuestions.push(q.id);
         perQ[q.id] = null;
         return;
       }
@@ -3145,7 +4046,6 @@ async function autoGradeAttempts(examId, exam) {
         if (norm(a.textValue) === norm(key.correctText)) sc = Number(q.score) || 0;
       } else {
         hasManual = true;
-        manualQuestions.push(q.id);
         perQ[q.id] = null;
         return;
       }
@@ -3169,1311 +4069,17 @@ async function autoGradeAttempts(examId, exam) {
         updateData.gradedBy = currentProfile.uid;
         updateData.status = "graded";
         gradedCount++;
-      } else {
-        updateData.hasPendingManual = true;
-        updateData.pendingManualQuestions = manualQuestions;
-        pendingManual++;
       }
 
       await updateDoc(doc(db, "attempts", attempt.id), updateData);
     } catch (err) { console.warn("auto-grade failed", attempt.id, err); }
   }
 
-  return { graded: gradedCount, pendingManual, total: ungraded.length };
-}
-
-function getAllExamQuestions(exam) {
-  if (exam.forms && exam.forms.length) return exam.forms.flatMap((f) => f.questions || []);
-  return exam.questions || [];
+  return { graded: gradedCount, total: ungraded.length };
 }
 
 /* ============================================================
-   AI QEYAS — BATCH GRADING FLOW
-   ============================================================ */
-async function runAIGradeAll(exam, attempts) {
-  const allQuestions = getAllExamQuestions(exam);
-  const essayQuestions = allQuestions.filter(isEssay);
-  if (!essayQuestions.length) {
-    toast("مفيش أسئلة مقالية في الامتحان ده", "info");
-    return;
-  }
-
-  /* ===== الخطوة 1: تصحيح تلقائي للموضوعي (ببلاش) ===== */
-  try {
-    await autoGradeAttempts(exam.id, exam);
-  } catch (err) {
-    console.warn("[ai] auto-grade pre-step failed:", err);
-  }
-
-  /* ===== الخطوة 2: نعيد قراءة المحاولات ===== */
-  const freshAttempts = await listAttempts(exam.id);
-  const submittedAttempts = freshAttempts.filter(
-    (a) => a.status === "submitted" && !a.gradedAt
-  );
-
-  if (!submittedAttempts.length) {
-    toast("كل الأوراق مصححة بالفعل", "info");
-    renderExamDetails(currentParams);
-    return;
-  }
-
-  const totalEssays = essayQuestions.length * submittedAttempts.length;
-
-  if (totalEssays > AI_CONSTANTS.MAX_ESSAYS_PER_REQUEST) {
-    openModal({
-      title: "العدد كبير أوي",
-      body: el("div", { class: "stack-sm" }, [
-        el("p", { class: "text-secondary" }, [
-          document.createTextNode(`الامتحان فيه ${totalEssays} إجابة مقالية، والحد الأقصى للطلب الواحد ${AI_CONSTANTS.MAX_ESSAYS_PER_REQUEST} إجابة.`)
-        ]),
-        el("p", { class: "text-sm text-muted", text: "قلل عدد الطلاب في الطلب الواحد." })
-      ]),
-      actions: [{ label: "تمام", class: "btn-primary" }]
-    });
-    return;
-  }
-
-  const cost = computeAICost(essayQuestions.length, submittedAttempts.length);
-  const currentBalance = currentCredits?.balance ?? 0;
-  const afterBalance = currentBalance - cost;
-
-  const body = el("div", { class: "stack" });
-  body.appendChild(el("p", { class: "text-secondary" }, [
-    document.createTextNode("AI Qeyas هيصحح ")
-  , el("strong", { text: String(submittedAttempts.length) }),
-    document.createTextNode(" ورقة، فيها ")
-  , el("strong", { text: String(essayQuestions.length) }),
-    document.createTextNode(" سؤال مقالي.")
-  ]));
-
-  const costBox = el("div", { class: "ai-confirm-cost" });
-  costBox.appendChild(el("span", { class: "ai-confirm-cost-label", text: "التكلفة المتوقعة" }));
-  const costVal = el("span", { class: "ai-confirm-cost-value" });
-  costVal.appendChild(creditCoinImg(28));
-  costVal.appendChild(document.createTextNode(" " + cost));
-  costBox.appendChild(costVal);
-  body.appendChild(costBox);
-
-  const breakdown = el("div", { class: "ai-confirm-breakdown" });
-  [
-    ["إجمالي الإجابات المقالية", String(totalEssays)],
-    ["رصيدك الحالي", String(currentBalance)],
-    ["الرصيد بعد العملية", String(afterBalance)],
-    ["الموضوعي (اختيار/صح-خطأ/أكمل)", "تم تصحيحه تلقائيًا ✓"]
-  ].forEach(([k, v]) => {
-    breakdown.appendChild(el("div", { class: "row-between" }, [
-      el("span", { text: k }), el("span", { text: v })
-    ]));
-  });
-  body.appendChild(breakdown);
-
-  if (currentBalance < cost) {
-    const errBox = el("div", {
-      style: "padding:12px 14px;background:var(--danger-50);color:var(--danger-600);border:1px solid var(--danger-500);border-radius:var(--r-sm);font-size:var(--fs-sm)"
-    }, [
-      el("strong", { text: "رصيدك غير كافٍ. " }),
-      document.createTextNode("محتاج "),
-      el("strong", { text: String(cost) }),
-      document.createTextNode(" كريدت. اشتر باقة أولاً.")
-    ]);
-    body.appendChild(errBox);
-  } else {
-    body.appendChild(el("p", { class: "text-sm text-muted" },
-      [document.createTextNode("AI هيقترح درجات لكل إجابة مقالية. إنت تراجعها قبل الاعتماد.")]));
-  }
-
-  const actions = [{ label: "إلغاء", class: "btn-ghost" }];
-  if (currentBalance >= cost) {
-    actions.push({
-      label: "موافق، ابدأ التصحيح",
-      class: "btn-gold",
-      onClick: async () => {
-        await actuallyRunAIGradeAll(exam, submittedAttempts, essayQuestions, cost);
-        return true;
-      }
-    });
-  } else {
-    actions.push({
-      label: "اشتر باقة",
-      class: "btn-primary",
-      onClick: () => { navigate("/app/subscription"); return true; }
-    });
-  }
-
-  openModal({ title: "تصحيح الكل بالـ AI", body, className: "ai-confirm-modal", actions });
-}
-
-async function actuallyRunAIGradeAll(exam, attempts, essayQuestions, cost) {
-  const queueModal = openModal({
-    title: "في انتظار دورك…",
-    body: buildQueueModalBody(1, 20),
-    className: "ai-confirm-modal",
-    actions: []
-  });
-
-  const positionData = { position: 1, waitSec: 20 };
-  const tickTimer = setInterval(() => {
-    if (positionData.waitSec > 0) positionData.waitSec--;
-    const container = queueModal.box.querySelector("[data-queue-body]");
-    if (container) {
-      container.innerHTML = "";
-      container.appendChild(buildQueueModalContent(positionData.position, positionData.waitSec));
-    }
-  }, 1000);
-
-  let claimed = false;
-  try {
-    claimed = await waitForAISlot(({ position, waitSec }) => {
-      positionData.position = position;
-      positionData.waitSec = waitSec;
-    });
-
-    if (!claimed) {
-      clearInterval(tickTimer);
-      queueModal.close();
-      toast("الخدمة مشغولة حاليًا، حاول بعد شوية", "warning", 6000);
-      return;
-    }
-
-    const slotClaimed = await claimAISlot();
-    if (!slotClaimed) {
-      clearInterval(tickTimer);
-      queueModal.close();
-      toast("الخدمة مشغولة حاليًا، حاول بعد شوية", "warning", 6000);
-      return;
-    }
-
-    clearInterval(tickTimer);
-    queueModal.close();
-    showGlobalLoading("AI Qeyas بيصحح…");
-
-    const submissions = attempts.map((att) => ({
-      attemptId: att.id,
-      studentName: att.studentName,
-      answers: essayQuestions.map((q) => {
-        const a = (att.answers || {})[q.id] || {};
-        return {
-          questionId: q.id,
-          type: q.type,
-          text: a.essayText || a.justification || "",
-          selectedIndex: a.selectedIndex ?? null,
-          boolValue: a.boolValue ?? null
-        };
-      })
-    }));
-
-    const questionsPayload = essayQuestions.map((q) => ({
-      id: q.id,
-      type: q.type,
-      header: q.header || "",
-      text: q.text,
-      score: Number(q.score) || 0,
-      modelAnswer: q.modelAnswer || "",
-      justificationModelAnswer: q.justificationModelAnswer || "",
-      correctIndex: q.correctIndex ?? null,
-      correctBool: q.correctBool ?? null,
-      options: q.options || []
-    }));
-
-    const result = await aiGradeBatch({
-      examId: exam.id,
-      examTitle: exam.title || "",
-      questions: questionsPayload,
-      submissions,
-      estimatedCost: cost
-    });
-
-    const scores = result.scores || [];
-    for (const item of scores) {
-      const attemptRef = doc(db, "attempts", item.attemptId);
-      const perQScores = {};
-      (item.questionScores || []).forEach((qs) => {
-        perQScores[qs.questionId] = Number(qs.score) || 0;
-      });
-
-      const attemptSnap = await getDoc(attemptRef);
-      if (!attemptSnap.exists()) continue;
-
-      const existing = attemptSnap.data();
-      const manualScores = { ...(existing.manualScores || {}), ...perQScores };
-      const autoScore = existing.autoScore || 0;
-
-      let manualTotal = 0;
-      Object.values(manualScores).forEach((v) => { manualTotal += Number(v) || 0; });
-
-      const totalScore = autoScore + manualTotal;
-      const totalPossible = existing.totalPossible || exam.totalScore || 0;
-
-      await updateDoc(attemptRef, {
-        manualScores,
-        score: totalScore,
-        percentage: totalPossible ? Math.round((totalScore / totalPossible) * 100) : 0,
-        gradedAt: serverTimestamp(),
-        gradedBy: currentProfile.uid,
-        gradedByAI: true,
-        aiGradedAt: serverTimestamp(),
-        status: "graded"
-      });
-    }
-
-    hideGlobalLoading();
-    toast(`تم تصحيح ${scores.length} ورقة بـ AI Qeyas`, "success", 5000);
-    renderExamDetails(currentParams);
-  } catch (err) {
-    hideGlobalLoading();
-    clearInterval(tickTimer);
-    try { queueModal.close(); } catch {}
-    console.error("[ai-grade-all]", err);
-
-    const codeMap = {
-      INSUFFICIENT_CREDITS: "رصيدك غير كافٍ — اشتر باقة أولاً",
-      AI_SERVICE_ERROR: "الخدمة مش متاحة دلوقتي — حاول بعد شوية",
-      AI_QUOTA_EXCEEDED: "تم استهلاك الحد اليومي — حاول بكرة",
-      AI_EMPTY_RESPONSE: "لم يتم استلام رد من الخدمة — حاول مرة أخرى",
-      AI_BAD_FORMAT: "استجابة غير صالحة — حاول مرة أخرى",
-      AI_NO_SCORES: "لم يتم استخراج درجات — حاول مرة أخرى",
-      INVALID_INPUT: "بيانات الطلب غير صحيحة",
-      UNAUTHORIZED: "انتهت جلستك — أعد تسجيل الدخول",
-      NOT_AUTHED: "انتهت جلستك — أعد تسجيل الدخول",
-      AI_FAILED: "فشل التصحيح التلقائي — حاول مرة أخرى",
-      TOO_MANY_ESSAYS: "عدد الإجابات المقالية كبير جدًا"
-    };
-    toast(codeMap[err.code] || codeMap.AI_FAILED, "error", 7000);
-  } finally {
-    if (claimed) {
-      try { await releaseAISlot(); } catch {}
-    }
-  }
-}
-
-function buildQueueModalBody(position, waitSec) {
-  const body = el("div", { class: "stack" });
-  const container = el("div", { "data-queue-body": "1" });
-  container.appendChild(buildQueueModalContent(position, waitSec));
-  body.appendChild(container);
-  return body;
-}
-
-function buildQueueModalContent(position, waitSec) {
-  const wrap = el("div", { class: "stack-sm" });
-
-  const msg = el("p", { class: "text-secondary" });
-  if (position <= 1) {
-    msg.textContent = "الخدمة مشغولة — جارٍ تجهيز دورك…";
-  } else {
-    msg.textContent = `في انتظار دورك… ترتيبك الحالي: ${position}`;
-  }
-  wrap.appendChild(msg);
-
-  const countdownBox = el("div", { class: "ai-confirm-cost" });
-  countdownBox.appendChild(el("span", { class: "ai-confirm-cost-label", text: "متبقي تقريبًا" }));
-  const secEl = el("span", { class: "ai-confirm-cost-value" });
-  secEl.appendChild(document.createTextNode(String(waitSec) + " ث"));
-  countdownBox.appendChild(secEl);
-  wrap.appendChild(countdownBox);
-
-  wrap.appendChild(el("p", { class: "text-xs text-muted",
-    text: "الخدمة بتشتغل بعدد محدود في نفس الوقت لضمان الجودة. اقفل الرسالة لو مش عايز تستنى."
-  }));
-
-  return wrap;
-}
-
-/* ============================================================
-   ATTEMPT DETAILS
-   ============================================================ */
-const EVENT_LABELS = {
-  tab_hidden:       { label: "خرج من الصفحة",          color: "warning" },
-  tab_visible:      { label: "رجع للصفحة",             color: "success" },
-  window_blur:      { label: "خرج من النافذة",         color: "warning" },
-  window_focus:     { label: "رجع للنافذة",            color: "success" },
-  copy_attempt:     { label: "محاولة نسخ",             color: "danger"  },
-  cut_attempt:      { label: "محاولة قص",              color: "danger"  },
-  paste_blocked:    { label: "محاولة لصق (مرفوضة)",     color: "danger"  },
-  context_menu:     { label: "فتح القائمة اليمنى",      color: "warning" },
-  fullscreen_exit:  { label: "خرج من ملء الشاشة",      color: "danger"  },
-  devtools_attempt: { label: "محاولة فتح DevTools",     color: "danger"  },
-  devtools_open:    { label: "DevTools مفتوحة",        color: "danger"  },
-  shortcut_c:       { label: "اختصار نسخ (Ctrl+C)",    color: "warning" },
-  shortcut_x:       { label: "اختصار قص (Ctrl+X)",     color: "warning" },
-  shortcut_a:       { label: "اختصار تحديد الكل",       color: "warning" },
-  shortcut_s:       { label: "اختصار حفظ الصفحة",       color: "warning" },
-  shortcut_p:       { label: "اختصار طباعة",           color: "warning" },
-  shortcut_u:       { label: "اختصار عرض المصدر",       color: "warning" },
-  printscreen_blocked: { label: "محاولة PrintScreen",    color: "danger"  },
-  offline:          { label: "انقطع الاتصال",          color: "warning" },
-  online:           { label: "عاد الاتصال",           color: "success" }
-};
-
-function openAttemptDetails(attempt, exam) {
-  const events = (attempt.anticheatEvents || []).slice().sort((a, b) => (a.at || 0) - (b.at || 0));
-  const count = (type) => events.filter((e) => e.type === type).length;
-  const stats = {
-    tabSwitches: count("tab_hidden"),
-    windowBlurs: count("window_blur"),
-    copyAttempts: count("copy_attempt") + count("cut_attempt"),
-    pasteAttempts: count("paste_blocked"),
-    contextMenu: count("context_menu"),
-    fsExits: count("fullscreen_exit"),
-    devtools: count("devtools_attempt") + count("devtools_open"),
-    shortcuts: events.filter((e) => (e.type || "").startsWith("shortcut_")).length,
-    offline: count("offline"),
-    printScreens: count("printscreen_blocked")
-  };
-
-  const totalSuspicious =
-    stats.tabSwitches + stats.windowBlurs + stats.copyAttempts +
-    stats.pasteAttempts + stats.fsExits + stats.devtools + stats.shortcuts + stats.printScreens;
-
-  const body = el("div", { class: "stack" });
-  const info = el("div", { class: "card", style: "background:var(--bg-subtle)" });
-  const totalPossible = exam.totalScore || 0;
-  [
-    ["الطالب", attempt.studentName || "—"],
-    ["الحالة", statusLabel(attempt.status || "draft")],
-    ["البدء", fmtDate(attempt.startedAt)],
-    ["التسليم", attempt.submittedAt ? fmtDate(attempt.submittedAt) : "—"],
-    ["الدرجة", attempt.score != null ? `${attempt.score} / ${totalPossible}` : "—"]
-  ].forEach(([k, v]) => {
-    info.appendChild(el("div", { class: "row-between", style: "padding:6px 0" }, [
-      el("span", { class: "text-sm text-muted", text: k }),
-      el("span", { class: "text-sm fw-semibold", text: v })
-    ]));
-  });
-  body.appendChild(info);
-
-  let verdictText = "لم يتم رصد أي نشاط مريب.";
-  let verdictClass = "is-success";
-  if (totalSuspicious >= 10) { verdictText = "نشاط مريب كثيف — يُنصح بمراجعة الإجابات يدويًا."; verdictClass = "is-danger"; }
-  else if (totalSuspicious >= 4) { verdictText = "نشاط مريب ملحوظ — راجع التفاصيل."; verdictClass = "is-warning"; }
-  else if (totalSuspicious > 0) { verdictText = "نشاط بسيط تم رصده."; verdictClass = "is-info"; }
-
-  const verdict = el("div", { class: `quick-report-item ${verdictClass}`, style: "padding:var(--sp-4);border-radius:var(--r-md)" });
-  verdict.appendChild(el("div", { class: "fw-semibold", text: verdictText }));
-  body.appendChild(verdict);
-
-  const statsGrid = el("div", { class: "quick-report" });
-  [
-    ["تبديل تاب", stats.tabSwitches, "is-warning"],
-    ["خروج من النافذة", stats.windowBlurs, "is-warning"],
-    ["نسخ / قص", stats.copyAttempts, "is-danger"],
-    ["لصق مرفوض", stats.pasteAttempts, "is-danger"],
-    ["خروج من ملء الشاشة", stats.fsExits, "is-danger"],
-    ["DevTools", stats.devtools, "is-danger"],
-    ["اختصارات", stats.shortcuts, "is-warning"],
-    ["PrintScreen", stats.printScreens, "is-danger"],
-    ["انقطاع نت", stats.offline, "is-info"]
-  ].forEach(([label, value, cls]) => {
-    const item = el("div", { class: `quick-report-item ${value > 0 ? cls : ""}` });
-    item.appendChild(el("span", { class: "quick-report-label", text: label }));
-    item.appendChild(el("span", { class: "quick-report-value", text: String(value) }));
-    statsGrid.appendChild(item);
-  });
-  body.appendChild(statsGrid);
-
-  const timelineHeader = el("div", {
-    class: "builder-panel-title",
-    style: "display:flex;align-items:center;gap:8px;margin-top:var(--sp-4)"
-  });
-  timelineHeader.appendChild(svgIcon("clock", 18));
-  timelineHeader.appendChild(document.createTextNode(`الخط الزمني (${events.length} حدث)`));
-  body.appendChild(timelineHeader);
-
-  if (!events.length) {
-    body.appendChild(el("div", { class: "empty", style: "padding:var(--sp-6)" }, [
-      el("p", { class: "text-muted", text: "لا توجد أحداث مسجلة لهذه المحاولة." })
-    ]));
-  } else {
-    const timeline = el("div", { class: "attempt-timeline" });
-    events.forEach((evt) => {
-      const meta = EVENT_LABELS[evt.type] || { label: evt.type, color: "info" };
-      const row = el("div", { class: `attempt-timeline-row is-${meta.color}` });
-      const left = el("div", { style: "display:flex;align-items:center;gap:10px;min-width:0" });
-      const text = el("div", { style: "min-width:0" });
-      text.appendChild(el("div", { class: "text-sm fw-semibold", text: meta.label }));
-      if (evt.count != null) text.appendChild(el("div", { class: "text-xs text-muted", text: `المرة ${evt.count}` }));
-      left.appendChild(text);
-      row.appendChild(left);
-      const time = new Date(evt.at || 0).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-      row.appendChild(el("span", { class: "attempt-timeline-time", text: time }));
-      timeline.appendChild(row);
-    });
-    body.appendChild(timeline);
-  }
-
-  openModal({
-    title: `تفاصيل جلسة — ${attempt.studentName || "طالب"}`,
-    body,
-    className: "attempt-details-modal",
-    actions: [
-      { label: "إغلاق", class: "btn-ghost" },
-      { label: "تصحيح الورقة", class: "btn-primary", onClick: () => navigate(`/app/grading?exam=${exam.id}&attempt=${attempt.id}`) }
-    ]
-  });
-}
-
-/* ============================================================
-   LEADERBOARD
-   ============================================================ */
-function buildLeaderboardRanking(attempts) {
-  const valid = attempts.filter((a) => (a.status === "submitted" || a.status === "graded") && a.gradedAt);
-  const sorted = valid.slice().sort((a, b) => {
-    const sa = Number(a.score || 0);
-    const sb = Number(b.score || 0);
-    if (sb !== sa) return sb - sa;
-    const ta = a.submittedAt?.toMillis?.() || 0;
-    const tb = b.submittedAt?.toMillis?.() || 0;
-    return ta - tb;
-  });
-
-  let rank = 0;
-  let lastScore = null;
-
-  sorted.forEach((a, i) => {
-    const score = Number(a.score || 0);
-    if (score !== lastScore) {
-      rank = i + 1; lastScore = score;
-      a._rank = rank; a._isDuplicate = false;
-    } else {
-      a._rank = rank; a._isDuplicate = true;
-    }
-  });
-
-  return sorted;
-}
-
-function buildLeaderboard(exam, attempts) {
-  const ranked = buildLeaderboardRanking(attempts);
-  const totalPossible = exam.totalScore || 0;
-  const wrapper = el("div", { class: "card", style: "margin-bottom:var(--sp-5)" });
-  const header = el("h3", {
-    class: "builder-panel-title",
-    style: "margin-bottom:var(--sp-4);display:flex;align-items:center;gap:8px"
-  });
-  header.appendChild(svgIcon("award", 22));
-  header.appendChild(document.createTextNode("لوحة المراكز"));
-  wrapper.appendChild(header);
-
-  if (!ranked.length) {
-    wrapper.appendChild(el("div", { class: "empty", style: "padding:var(--sp-6)" }, [
-      el("p", { class: "text-muted", text: "لا يوجد طلاب مصححون بعد." })
-    ]));
-    return wrapper;
-  }
-
-  const podium = el("div", { class: "leaderboard-podium" });
-  const medals = ["1", "2", "3"];
-  [1, 0, 2].forEach((idx) => {
-    const a = ranked[idx];
-    if (!a) { podium.appendChild(el("div")); return; }
-    const place = idx + 1;
-    const item = el("div", { class: `podium-item is-${place}` });
-    item.appendChild(el("div", { class: "podium-medal", text: medals[idx] }));
-    item.appendChild(el("div", { class: "podium-avatar", text: (a.studentName || "؟").charAt(0) }));
-    item.appendChild(el("div", { class: "podium-name", text: a.studentName || "—" }));
-    item.appendChild(el("div", { class: "podium-score", text: `${a.score || 0} / ${totalPossible}` }));
-    if (a._isDuplicate) item.appendChild(el("span", { class: "lb-dup-badge", text: "مكرر" }));
-    podium.appendChild(item);
-  });
-  wrapper.appendChild(podium);
-
-  if (ranked.length > 3) {
-    const list = el("div", { class: "leaderboard-list" });
-    ranked.slice(3).forEach((a) => {
-      const row = el("div", { class: "leaderboard-row" });
-      row.appendChild(el("div", { class: "lb-rank", text: String(a._rank) }));
-      const nameWrap = el("div", { class: "lb-name" });
-      nameWrap.appendChild(document.createTextNode(a.studentName || "—"));
-      if (a._isDuplicate) nameWrap.appendChild(el("span", { class: "lb-dup-badge", text: "مكرر" }));
-      row.appendChild(nameWrap);
-      row.appendChild(el("div", { class: "lb-score", text: `${a.score || 0}` }));
-      row.appendChild(el("div", { class: "lb-time", text: fmtDate(a.submittedAt) }));
-      list.appendChild(row);
-    });
-    wrapper.appendChild(list);
-  }
-
-  return wrapper;
-}
-
-function renderLeaderboardPage(exam, attempts) {
-  const page = $('[data-page="exam"]');
-  if (!page) return;
-  $("[data-exam-loading]").hidden = true;
-  $("[data-exam-error]").hidden = true;
-
-  const old = document.querySelector("[data-exam-leaderboard]");
-  if (old) old.remove();
-
-  const container = el("div", { class: "exam-layout", "data-exam-leaderboard": "1" });
-  const inner = el("div", { class: "container", style: "max-width:800px;padding:0" });
-
-  const header = el("div", { class: "card-brutal tint-1 offset-lg", style: "text-align:center;padding:var(--sp-8);margin-bottom:var(--sp-5)" });
-  header.appendChild(el("h1", { style: "font-size:var(--fs-3xl);margin-bottom:8px", text: exam.title || "امتحان" }));
-  header.appendChild(el("p", { class: "text-muted", text: "انتهى الامتحان واكتمل التصحيح — إليك النتائج النهائية" }));
-  header.appendChild(el("p", {
-    class: "text-secondary",
-    style: "margin-top:12px;font-size:var(--fs-sm)",
-    text: `عدد المشاركين: ${attempts.filter((a) => a.gradedAt).length}`
-  }));
-  inner.appendChild(header);
-
-  inner.appendChild(buildLeaderboard(exam, attempts));
-
-  const cta = el("div", { style: "margin-top:var(--sp-5);text-align:center" });
-  cta.appendChild(el("button", {
-    type: "button", class: "btn btn-primary btn-lg", text: "تحديث",
-    onclick: () => location.reload()
-  }));
-  inner.appendChild(cta);
-  container.appendChild(inner);
-  page.appendChild(container);
-}
-
-/* ============================================================
-   SHARE EXAM (QR)
-   ============================================================ */
-function shareExam(exam) {
-  const url = `${location.origin}${location.pathname}#/exam?id=${exam.id}`;
-  const body = el("div", { class: "stack" });
-
-  const linkField = el("div", { class: "field" });
-  linkField.appendChild(el("label", { class: "field-label", text: "رابط الامتحان" }));
-  const linkRow = el("div", { class: "row" });
-  const linkInput = el("input", { class: "input flex-1", type: "text", readonly: "readonly", value: url });
-  linkInput.addEventListener("click", () => linkInput.select());
-  linkRow.appendChild(linkInput);
-
-  const copyBtn = el("button", { class: "btn btn-outline btn-sm", type: "button", text: "نسخ" });
-  copyBtn.addEventListener("click", () => { navigator.clipboard.writeText(url); toast("تم النسخ", "success"); });
-  linkRow.appendChild(copyBtn);
-  linkField.appendChild(linkRow);
-  body.appendChild(linkField);
-
-  const qrSection = el("div", { class: "qr-section" });
-  qrSection.appendChild(el("div", { class: "field-label text-center", text: "امسح الكود" }));
-  const qrWrap = el("div", { class: "qr-wrap", id: "qrContainer" });
-  qrSection.appendChild(qrWrap);
-  body.appendChild(qrSection);
-
-  openModal({
-    title: "شارك الامتحان", body, className: "share-exam-modal",
-    actions: [
-      { label: "تحميل QR", class: "btn-outline", keepOpen: true, onClick: () => downloadQR(exam.title || "امتحان") },
-      { label: "إغلاق", class: "btn-primary" }
-    ]
-  });
-
-  setTimeout(() => {
-    const container = document.getElementById("qrContainer");
-    if (!container || typeof QRCode === "undefined") return;
-    container.innerHTML = "";
-    new QRCode(container, {
-      text: url, width: 220, height: 220,
-      colorDark: "#0f172a", colorLight: "#ffffff",
-      correctLevel: QRCode.CorrectLevel.H
-    });
-  }, 50);
-}
-
-function downloadQR(examTitle) {
-  const container = document.getElementById("qrContainer");
-  if (!container) return;
-  const canvas = container.querySelector("canvas");
-  const img = container.querySelector("img");
-  let dataURL = null;
-  if (canvas) dataURL = canvas.toDataURL("image/png");
-  else if (img && img.src) dataURL = img.src;
-  if (!dataURL) { toast("تعذّر إنشاء الصورة", "error"); return; }
-
-  const safe = (examTitle || "exam").replace(/[^a-zA-Z0-9\u0600-\u06FF]/g, "_");
-  const link = document.createElement("a");
-  link.download = `QR_${safe}.png`;
-  link.href = dataURL;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  toast("تم التحميل", "success");
-}
-
-/* ============================================================
-   GRADING (single attempt)
-   ============================================================ */
-async function renderGrading(params) {
-  const examId = params?.get("exam");
-  const attemptId = params?.get("attempt");
-  const host = $("[data-grading-host]");
-  if (!host) return;
-  host.innerHTML = "";
-
-  if (!examId || !attemptId) {
-    host.appendChild(el("div", { class: "empty" }, [el("p", { text: "بيانات ناقصة." })]));
-    return;
-  }
-
-  const exam = await getExam(examId);
-  const aSnap = await getDoc(doc(db, "attempts", attemptId));
-  if (!exam || !aSnap.exists()) {
-    host.appendChild(el("div", { class: "empty" }, [el("p", { text: "غير موجود" })]));
-    return;
-  }
-
-  const answersMap = await getExamAnswers(examId);
-  const attempt = { id: attemptId, ...aSnap.data() };
-  const allQuestions = getAllExamQuestions(exam);
-  const answers = attempt.answers || {};
-  const manualScores = { ...(attempt.manualScores || {}) };
-  const feedback = { ...(attempt.feedback || {}) };
-  const perQ = attempt.perQuestionScores || {};
-  const totalPossible = allQuestions.reduce((s, q) => s + (Number(q.score) || 0), 0);
-
-  const head = el("div", { class: "card grading-student-head" });
-  const info = el("div", {});
-  info.appendChild(el("h2", { text: attempt.studentName || "طالب" }));
-  info.appendChild(el("p", { class: "text-muted text-sm", text: fmtDate(attempt.submittedAt) }));
-  head.appendChild(info);
-
-  const headActions = el("div", { class: "row" });
-  headActions.appendChild(el("span", { class: `badge badge-${attempt.status || "draft"}`, text: statusLabel(attempt.status || "draft") }));
-  const backBtn = el("button", { class: "btn btn-ghost btn-sm", type: "button", text: "السابق" });
-  backBtn.addEventListener("click", () => navigate(`/app/exam?id=${examId}`));
-  headActions.appendChild(backBtn);
-  head.appendChild(headActions);
-  host.appendChild(head);
-
-  const list = el("div", { class: "grading-answers" });
-  host.appendChild(list);
-
-  allQuestions.forEach((q, i) => {
-    const a = answers[q.id] || {};
-    const isManual = isEssay(q);
-    const key = answersMap[q.id] || {};
-
-    const card = el("div", { class: "grading-card" });
-    if (q.header) card.appendChild(el("div", { class: "q-header-text", text: q.header }));
-    card.appendChild(el("div", { class: "grading-question", text: `س${i + 1} · ${q.text}` }));
-
-    const ansBlock = el("div", { class: "grading-answer-block" });
-    ansBlock.appendChild(el("div", { class: "answer-label" }, [
-      svgIcon("user", 14), document.createTextNode("إجابة الطالب")
-    ]));
-
-    const isUnanswered = !isAnswered(a, q);
-
-    if (isUnanswered) {
-      const emptyBlock = el("div", {
-        class: "essay-answer-block",
-        style: "color:var(--danger-500);font-style:italic;background:var(--danger-50);border-inline-start-color:var(--danger-500);text-align:center;font-weight:var(--fw-semibold)"
-      });
-      emptyBlock.textContent = "الطالب لم يجب على السؤال";
-      ansBlock.appendChild(emptyBlock);
-    } else if (q.type === "essay") {
-      const essayBlock = el("div", { class: "essay-answer-block" });
-      essayBlock.textContent = a.essayText || "—";
-      ansBlock.appendChild(essayBlock);
-    } else {
-      let ansText = "";
-      if (q.type === "mcq" || q.type === "mcq_just") {
-        ansText = (a.selectedIndex != null && q.options?.[a.selectedIndex]) ? q.options[a.selectedIndex] : "—";
-      } else if (q.type === "tf" || q.type === "tf_just") {
-        ansText = a.boolValue === true ? "صح" : a.boolValue === false ? "خطأ" : "—";
-      } else if (q.type === "complete") {
-        ansText = a.textValue || "—";
-      }
-      ansBlock.appendChild(el("div", { text: ansText, style: "white-space:pre-wrap" }));
-
-      if (q.type === "mcq_just" || q.type === "tf_just") {
-        ansBlock.appendChild(el("div", { class: "answer-label mt-3" }, [
-          svgIcon("edit", 14), document.createTextNode("التبرير")
-        ]));
-        if (a.justification && a.justification.trim()) {
-          const jBlock = el("div", { class: "essay-answer-block" });
-          jBlock.textContent = a.justification;
-          ansBlock.appendChild(jBlock);
-        } else {
-          const emptyJ = el("div", {
-            class: "essay-answer-block",
-            style: "color:var(--text-muted);font-style:italic;background:var(--bg-subtle);border-inline-start-color:var(--border-strong)"
-          });
-          emptyJ.textContent = "لم يكتب الطالب تبريرًا";
-          ansBlock.appendChild(emptyJ);
-        }
-      }
-    }
-    card.appendChild(ansBlock);
-
-    if (q.type !== "essay") {
-      const corBlock = el("div", { class: "grading-answer-block" });
-      corBlock.appendChild(el("div", { class: "answer-label" }, [
-        svgIcon("check", 14), document.createTextNode("الإجابة الصحيحة")
-      ]));
-      let correctText = "—";
-      if (q.type === "mcq" || q.type === "mcq_just") correctText = q.options?.[key.correctIndex] || "—";
-      else if (q.type === "tf" || q.type === "tf_just") correctText = key.correctBool ? "صح" : "خطأ";
-      else if (q.type === "complete") correctText = key.correctText || "—";
-      corBlock.appendChild(el("div", { class: "grading-correct-answer", text: correctText }));
-      card.appendChild(corBlock);
-    }
-
-    if (q.type === "essay" && key.modelAnswer) {
-      card.appendChild(el("div", { class: "answer-label" }, [
-        svgIcon("book", 14), document.createTextNode("الإجابة النموذجية")
-      ]));
-      const modelBlock = el("div", { class: "model-answer-block" });
-      modelBlock.textContent = key.modelAnswer;
-      card.appendChild(modelBlock);
-    }
-
-    if ((q.type === "mcq_just" || q.type === "tf_just") && key.justificationModelAnswer) {
-      card.appendChild(el("div", { class: "answer-label" }, [
-        svgIcon("book", 14), document.createTextNode("التبرير النموذجي")
-      ]));
-      const jBlock = el("div", { class: "model-answer-block" });
-      jBlock.textContent = key.justificationModelAnswer;
-      card.appendChild(jBlock);
-    }
-
-    if (isManual && manualScores[q.id] != null && attempt.gradedByAI) {
-      const aiBox = el("div", { class: "ai-suggestion-box" });
-      aiBox.appendChild(el("div", { class: "ai-suggestion-label" }, [
-        svgIcon("sparkles", 14),
-        document.createTextNode("اقتراح AI Qeyas")
-      ]));
-      aiBox.appendChild(el("div", { class: "ai-suggestion-value", text: `${manualScores[q.id]} / ${q.score || 1}` }));
-      card.appendChild(aiBox);
-    }
-
-    const scoreRow = el("div", { class: "grading-score-row" });
-
-    if (!isManual) {
-      const autoInfo = el("div", { class: "text-sm", style: "margin-bottom:8px;color:var(--text-muted);width:100%" });
-      autoInfo.appendChild(el("span", { text: "التصحيح التلقائي: " }));
-      autoInfo.appendChild(el("strong", {
-        text: `${perQ[q.id] || 0} / ${q.score || 1}`,
-        style: "color:var(--text-primary)"
-      }));
-      card.appendChild(autoInfo);
-    }
-
-    scoreRow.appendChild(el("span", { class: "text-sm fw-semibold", text: "الدرجة:" }));
-    const num = el("input", {
-      type: "number", class: "input",
-      min: "0", max: String(q.score || 1), step: "0.5",
-      style: "max-width:100px"
-    });
-
-    const existingManual = manualScores[q.id];
-    if (existingManual != null) num.value = existingManual;
-    else if (isManual) num.value = 0;
-    else num.value = Number(perQ[q.id] || 0);
-
-    num.addEventListener("input", () => { manualScores[q.id] = Number(num.value) || 0; });
-
-    scoreRow.appendChild(num);
-    scoreRow.appendChild(el("span", { class: "text-sm text-muted", text: `/ ${q.score || 1}` }));
-
-    if (!isManual) {
-      const resetBtn = el("button", {
-        class: "btn btn-ghost btn-xs", type: "button", text: "تلقائي",
-        onclick: () => {
-          delete manualScores[q.id];
-          num.value = Number(perQ[q.id] || 0);
-          toast("تم الرجوع للتصحيح التلقائي", "info", 2000);
-        }
-      });
-      scoreRow.appendChild(resetBtn);
-    }
-
-    card.appendChild(scoreRow);
-
-    const fbField = el("div", { class: "field mt-3" });
-    fbField.appendChild(el("label", { class: "field-label", text: "ملاحظة" }));
-    const fbInput = el("input", { type: "text", class: "input", value: feedback[q.id] || "" });
-    fbInput.addEventListener("input", () => { feedback[q.id] = fbInput.value; });
-    fbField.appendChild(fbInput);
-    card.appendChild(fbField);
-
-    list.appendChild(card);
-  });
-
-  const fbCard = el("div", { class: "card" });
-  fbCard.appendChild(el("label", { class: "field-label mb-2", text: "ملاحظات عامة" }));
-  const fbTa = el("textarea", { class: "textarea" });
-  fbTa.value = attempt.examFeedback || "";
-  fbCard.appendChild(fbTa);
-  host.appendChild(fbCard);
-
-  function computeFinalScore() {
-    let total = 0;
-    allQuestions.forEach((q) => {
-      if (manualScores[q.id] != null) total += Number(manualScores[q.id]) || 0;
-      else total += Number(perQ[q.id] || 0);
-    });
-    return total;
-  }
-
-  async function saveGrading() {
-    const finalScore = computeFinalScore();
-    await updateDoc(doc(db, "attempts", attemptId), {
-      manualScores, feedback,
-      examFeedback: fbTa.value,
-      score: finalScore,
-      percentage: totalPossible ? Math.round((finalScore / totalPossible) * 100) : 0,
-      gradedAt: serverTimestamp(),
-      gradedBy: currentProfile.uid,
-      status: "graded"
-    });
-  }
-
-  const actions = el("div", { class: "card row-between" });
-  const totalInfo = el("div", {});
-  totalInfo.appendChild(el("div", { class: "text-sm text-muted", text: "الدرجة الكلية" }));
-  totalInfo.appendChild(el("div", { class: "fw-bold text-lg", text: String(totalPossible) }));
-  actions.appendChild(totalInfo);
-
-  const actRow = el("div", { class: "row" });
-  const saveBtn = el("button", { class: "btn btn-outline", type: "button", text: "حفظ التصحيح" });
-  saveBtn.addEventListener("click", async () => {
-    try {
-      await saveGrading();
-      toast("تم حفظ التصحيح", "success");
-    } catch (err) {
-      console.error(err);
-      toast("فشل حفظ التصحيح: " + (err?.code === "permission-denied" ? "ليس لديك صلاحية" : "خطأ"), "error", 6000);
-    }
-  });
-  actRow.appendChild(saveBtn);
-
-  const publishBtn = el("button", { class: "btn btn-primary", type: "button", text: "نشر هذه النتيجة" });
-  publishBtn.addEventListener("click", async () => {
-    try {
-      await saveGrading();
-      const allAttempts = await listAttempts(examId);
-      const ungraded = allAttempts.filter((a) => !a.gradedAt && a.status === "submitted");
-      if (ungraded.length) {
-        toast(`جارٍ تصحيح ${ungraded.length} ورقة…`, "info");
-        await autoGradeAttempts(examId, exam);
-      }
-      await updateDoc(doc(db, "exams", examId), { resultPublishedAt: serverTimestamp() });
-      toast("تم نشر النتيجة", "success");
-      navigate(`/app/exam?id=${examId}`);
-    } catch (err) {
-      console.error(err);
-      toast("فشل النشر", "error");
-    }
-  });
-  actRow.appendChild(publishBtn);
-  actions.appendChild(actRow);
-  host.appendChild(actions);
-}
-
-/* ============================================================
-   PROFILE
-   ============================================================ */
-function renderProfile() {
-  if (!currentProfile) return;
-  $$("[data-profile-avatar]").forEach((e) => (e.src = currentProfile.photoURL || ""));
-  $$("[data-profile-name]").forEach((e) => (e.textContent = currentProfile.fullName || ""));
-  $$("[data-profile-handle]").forEach((e) => (e.textContent = "@" + (currentProfile.username || "")));
-  $$("[data-profile-id]").forEach((e) => (e.textContent = currentProfile.publicId ? String(currentProfile.publicId) : "—"));
-  $$("[data-profile-subject]").forEach((e) => (e.textContent = subjectLabel((currentProfile.subjects || [])[0] || "")));
-
-  const chips = $("[data-profile-subjects-chips]");
-  if (chips) {
-    chips.innerHTML = "";
-    (currentProfile.subjects || []).forEach((sid) => {
-      const label = sid.startsWith("custom:") ? sid.slice(7) : subjectLabel(sid);
-      chips.appendChild(el("span", { class: "chip", text: label }));
-    });
-  }
-}
-
-/* ============================================================
-   SETTINGS
-   ============================================================ */
-function renderSettings() {
-  $$("[data-setting-theme]").forEach((r) => {
-    r.checked = r.value === currentTheme;
-    if (!r.dataset.bound) {
-      r.dataset.bound = "1";
-      r.addEventListener("change", () => { if (r.checked) setTheme(r.value); });
-    }
-  });
-
-  $$("[data-setting-three]").forEach((r) => {
-    r.checked = r.value === currentThree;
-    if (!r.dataset.bound) {
-      r.dataset.bound = "1";
-      r.addEventListener("change", () => {
-        if (!r.checked) return;
-        setThree(r.value);
-        if (r.value === "on") setTimeout(() => location.reload(), 150);
-      });
-    }
-  });
-}
-
-/* ============================================================
-   CREDITS PAGE
-   ============================================================ */
-async function renderCreditsPage() {
-  const host = $("[data-credits-page]");
-  if (!host) return;
-
-  const balance = currentCredits?.balance ?? 0;
-  const totalAdded = currentCredits?.totalAdded ?? 0;
-  const totalSpent = currentCredits?.totalSpent ?? 0;
-  const plan = currentProfile?.subscription?.plan || "free";
-  const expiry = currentProfile?.subscription?.expiresAt;
-  const isLow = balance > 0 && balance < 20;
-
-  host.innerHTML = "";
-
-  const hero = el("div", { class: "credits-hero" });
-  hero.appendChild(el("div", { class: "credits-hero-label", text: "رصيدك الحالي" }));
-  const heroVal = el("div", { class: "credits-hero-value" });
-  heroVal.appendChild(document.createTextNode(String(balance)));
-  hero.appendChild(heroVal);
-  const heroPlan = el("div", { class: "credits-hero-plan" });
-  heroPlan.appendChild(svgIcon("star", 14));
-  heroPlan.appendChild(document.createTextNode(`باقة: ${planLabel(plan)}`));
-  if (plan !== "free" && expiry) heroPlan.appendChild(document.createTextNode(` · ينتهي: ${fmtDateShort(expiry)}`));
-  hero.appendChild(heroPlan);
-  host.appendChild(hero);
-
-  if (isLow) {
-    const warn = el("div", {
-      style: "padding:12px 16px;background:var(--warning-50);color:var(--warning-600);border:1px solid var(--warning-500);border-radius:var(--r-md);font-size:var(--fs-sm);font-weight:var(--fw-semibold)"
-    });
-    warn.textContent = "رصيدك منخفض — يُنصح بشراء باقة قبل الامتحانات القادمة.";
-    host.appendChild(warn);
-  }
-
-  const statsGrid = el("div", { class: "credits-stats" });
-  [
-    ["إجمالي المشحون", totalAdded],
-    ["إجمالي المستهلك", totalSpent]
-  ].forEach(([label, value]) => {
-    const s = el("div", { class: "credits-stat" });
-    s.appendChild(el("div", { class: "credits-stat-value", text: String(value) }));
-    s.appendChild(el("div", { class: "credits-stat-label", text: label }));
-    statsGrid.appendChild(s);
-  });
-  host.appendChild(statsGrid);
-
-  const cta = el("div", { class: "credits-cta" });
-  const buyBtn = el("button", { type: "button", class: "btn btn-gold btn-lg" });
-  buyBtn.appendChild(svgIcon("credit-card", 18));
-  buyBtn.appendChild(document.createTextNode(" اشتر باقة"));
-  buyBtn.addEventListener("click", () => navigate("/app/subscription"));
-  cta.appendChild(buyBtn);
-  host.appendChild(cta);
-
-  host.appendChild(el("h3", { class: "builder-panel-title mt-6", text: "سجل المعاملات" }));
-  const txHost = el("div", { class: "transactions-list" });
-  txHost.appendChild(el("div", { class: "sk-card" }, [
-    el("div", { class: "skeleton sk-line sk-sm" }),
-    el("div", { class: "skeleton sk-line sk-sm" })
-  ]));
-  host.appendChild(txHost);
-
-  try {
-    const txns = await loadTransactions(currentProfile.uid, 50);
-    txHost.innerHTML = "";
-    if (!txns.length) {
-      txHost.appendChild(el("div", { class: "empty", style: "padding:var(--sp-6)" }, [
-        el("p", { class: "text-muted", text: "لا يوجد معاملات بعد." })
-      ]));
-      return;
-    }
-    txns.forEach((tx) => {
-      const row = el("div", { class: "transaction-row" });
-      const isAdd = tx.amount > 0;
-      const icon = el("div", { class: `transaction-icon ${isAdd ? "is-add" : "is-spend"}` });
-      icon.appendChild(svgIcon(isAdd ? "plus" : "minus", 18));
-      row.appendChild(icon);
-
-      const info = el("div", { class: "transaction-info" });
-      const label = tx.note || (isAdd ? "إضافة رصيد" : sourceLabel(tx.source));
-      info.appendChild(el("div", { class: "transaction-label", text: label }));
-      info.appendChild(el("div", { class: "transaction-time", text: fmtDate(tx.createdAt) }));
-      row.appendChild(info);
-
-      row.appendChild(el("div", {
-        class: `transaction-amount ${isAdd ? "is-add" : "is-spend"}`,
-        text: `${isAdd ? "+" : ""}${tx.amount}`
-      }));
-      txHost.appendChild(row);
-    });
-  } catch {
-    txHost.innerHTML = "";
-    txHost.appendChild(el("div", { class: "empty", style: "padding:var(--sp-6)" }, [
-      el("p", { class: "text-muted", text: "تعذّر تحميل السجل." })
-    ]));
-  }
-}
-
-function sourceLabel(src) {
-  return {
-    signup: "رصيد ترحيبي",
-    manual_admin: "إضافة من الدعم",
-    subscription: "اشتراك باقة",
-    ai_explanation: "شرح AI",
-    ai_similar: "اقتراح أسئلة AI",
-    ai_essay_help: "تصحيح مقالي AI",
-    ai_analysis: "تحليل AI",
-    ai_grade_batch: "تصحيح الكل بـ AI Qeyas"
-  }[src] || "استخدام AI";
-}
-
-/* ============================================================
-   SUBSCRIPTION PAGE
-   ============================================================ */
-function renderSubscriptionPage() {
-  const host = $("[data-subscription-page]");
-  if (!host) return;
-
-  const currentPlan = currentProfile?.subscription?.plan || "free";
-  const expiry = currentProfile?.subscription?.expiresAt;
-
-  host.innerHTML = "";
-
-  const header = el("div", { style: "text-align:center;padding:var(--sp-6) 0" });
-  header.appendChild(el("h1", { style: "font-size:var(--fs-3xl);margin-bottom:var(--sp-2)", text: "اختر باقتك" }));
-  header.appendChild(el("p", { class: "text-secondary", text: "الاشتراك شهري، بيتم التجديد يدويًا بالتواصل مع الدعم." }));
-  if (currentPlan !== "free" && expiry) {
-    const sub = el("p", { class: "text-muted text-sm mt-3" });
-    sub.textContent = `باقتك الحالية: ${planLabel(currentPlan)} — تنتهي ${fmtDateShort(expiry)}`;
-    header.appendChild(sub);
-  }
-  host.appendChild(header);
-
-  const grid = el("div", { class: "pricing-grid" });
-  const packs = Object.values(CREDIT_PACKS).sort((a, b) => a.order - b.order);
-
-  packs.forEach((p) => {
-    const isCurrent = p.id === currentPlan;
-    const card = el("article", { class: `pricing-card ${p.badge ? "is-featured" : ""} ${isCurrent ? "is-current" : ""}` });
-    if (p.badge) card.appendChild(el("div", { class: "pricing-badge", text: p.badge }));
-    if (isCurrent) card.appendChild(el("div", { class: "pricing-current-badge", text: "الحالية" }));
-
-    const head = el("div", { class: "pricing-head" });
-    head.appendChild(el("h3", { class: "pricing-name", text: p.name }));
-    head.appendChild(el("p", { class: "pricing-desc", text: p.description }));
-    card.appendChild(head);
-
-    const price = el("div", { class: "pricing-price" });
-    price.appendChild(el("span", { class: "pricing-amount", text: String(p.priceEGP) }));
-    price.appendChild(el("span", { class: "pricing-currency", text: "جنيه" }));
-    price.appendChild(el("span", { class: "pricing-period", text: "/ شهريًا" }));
-    card.appendChild(price);
-
-    const feats = el("ul", { class: "pricing-features" });
-    const listItems = [
-      `${p.credits} كريدت AI Qeyas`,
-      "امتحانات غير محدودة",
-      "تصحيح تلقائي للموضوعي",
-      "نماذج متعددة",
-      "مراقبة ضد الغش"
-    ];
-    if (p.id !== "free") listItems.push("تحليلات متقدمة");
-    if (p.id === "premium" || p.id === "school") listItems.push("دعم أولوية");
-    if (p.id === "school") listItems.push("حسابات متعددة");
-    listItems.forEach((f) => {
-      const li = el("li");
-      li.appendChild(svgIcon("check", 16));
-      li.appendChild(el("span", { text: f }));
-      feats.appendChild(li);
-    });
-    card.appendChild(feats);
-
-    if (isCurrent && p.id !== "free") {
-      const renewBtn = el("button", {
-        type: "button", class: "btn btn-outline btn-block", text: "تجديد الباقة",
-        onclick: () => navigate(`/app/checkout?plan=${p.id}`)
-      });
-      card.appendChild(renewBtn);
-    } else if (p.id === "free") {
-      card.appendChild(el("button", {
-        type: "button", class: "btn btn-outline btn-block",
-        text: isCurrent ? "باقتك الحالية" : "الباقة المجانية",
-        disabled: "disabled"
-      }));
-    } else {
-      card.appendChild(el("button", {
-        type: "button", class: "btn btn-gold btn-block", text: "اشترك الآن",
-        onclick: () => navigate(`/app/checkout?plan=${p.id}`)
-      }));
-    }
-
-    grid.appendChild(card);
-  });
-
-  host.appendChild(grid);
-  host.appendChild(el("p", { class: "pricing-note", text: "الدفع يتم عبر التواصل مع الدعم بعد تأكيد الطلب." }));
-}
-
-/* ============================================================
-   CHECKOUT PAGE
-   ============================================================ */
-function renderCheckoutPage() {
-  const host = $("[data-checkout-page]");
-  if (!host) return;
-
-  const planId = currentParams?.get("plan");
-  const pack = CREDIT_PACKS[planId];
-  if (!pack || pack.id === "free") { navigate("/app/subscription"); return; }
-
-  host.innerHTML = "";
-
-  const summary = el("div", { class: "checkout-summary" });
-  summary.appendChild(el("div", {
-    style: "font-size:var(--fs-lg);font-weight:var(--fw-bold);margin-bottom:var(--sp-3)",
-    text: "ملخص الطلب"
-  }));
-  [
-    ["الباقة", pack.name],
-    ["الرصيد", `${pack.credits} كريدت`],
-    ["المدة", "شهر واحد"]
-  ].forEach(([k, v]) => {
-    summary.appendChild(el("div", { class: "checkout-summary-row" }, [
-      el("span", { text: k }), el("strong", { text: v })
-    ]));
-  });
-  summary.appendChild(el("div", { class: "checkout-summary-divider" }));
-  const totalRow = el("div", { class: "checkout-summary-total" });
-  totalRow.appendChild(el("span", { text: "الإجمالي" }));
-  totalRow.appendChild(el("span", { text: `${pack.priceEGP} جنيه` }));
-  summary.appendChild(totalRow);
-  host.appendChild(summary);
-
-  const form = el("div", { class: "checkout-form" });
-
-  const nameField = el("div", { class: "field" });
-  nameField.appendChild(el("label", { class: "field-label", text: "الاسم" }));
-  const nameInput = el("input", { type: "text", class: "input", readonly: "readonly" });
-  nameInput.value = currentProfile?.fullName || "";
-  nameField.appendChild(nameInput);
-  form.appendChild(nameField);
-
-  const idField = el("div", { class: "field" });
-  idField.appendChild(el("label", { class: "field-label", text: "الـ ID" }));
-  const idInput = el("input", { type: "text", class: "input", readonly: "readonly" });
-  idInput.value = currentProfile?.publicId ? String(currentProfile.publicId) : "—";
-  idField.appendChild(idInput);
-  form.appendChild(idField);
-
-  const phoneField = el("div", { class: "field" });
-  const phoneLabel = el("label", { class: "field-label" });
-  phoneLabel.appendChild(document.createTextNode("رقم الموبايل "));
-  phoneLabel.appendChild(el("span", { class: "text-danger", text: "*" }));
-  phoneField.appendChild(phoneLabel);
-  const phoneInput = el("input", {
-    type: "tel", class: "input", placeholder: "01xxxxxxxxx",
-    inputmode: "numeric", maxlength: "11", autocomplete: "tel"
-  });
-  phoneField.appendChild(phoneInput);
-  phoneField.appendChild(el("p", { class: "field-hint", text: "هنتواصل معاك على الرقم ده لتأكيد الاشتراك." }));
-  const phoneError = el("p", { class: "field-error", hidden: "hidden" });
-  phoneField.appendChild(phoneError);
-  form.appendChild(phoneField);
-
-  host.appendChild(form);
-
-  const note = el("div", { class: "checkout-whatsapp-note" });
-  note.appendChild(svgIcon("info", 18));
-  note.appendChild(el("div", {}, [
-    el("strong", { text: "الخطوة الجاية: " }),
-    document.createTextNode(`هيتم تحويلك على واتساب لرقم الدعم ${SUPPORT_PHONE} مع تفاصيل طلبك.`)
-  ]));
-  host.appendChild(note);
-
-  const actions = el("div", { class: "row", style: "gap:var(--sp-3);flex-wrap:wrap" });
-  const backBtn = el("button", {
-    type: "button", class: "btn btn-ghost btn-lg", text: "رجوع",
-    onclick: () => navigate("/app/subscription")
-  });
-  actions.appendChild(backBtn);
-
-  const confirmBtn = el("button", {
-    type: "button", class: "btn btn-gold btn-lg flex-1",
-    style: "min-width:200px"
-  });
-  confirmBtn.appendChild(svgIcon("whatsapp", 18));
-  confirmBtn.appendChild(document.createTextNode(" تأكيد واشترك"));
-  actions.appendChild(confirmBtn);
-
-  confirmBtn.addEventListener("click", async () => {
-    const phone = (phoneInput.value || "").trim();
-    phoneError.hidden = true;
-
-    if (!/^01[0-9]{9}$/.test(phone)) {
-      phoneError.hidden = false;
-      phoneError.textContent = "أدخل رقم موبايل مصري صحيح (11 رقم يبدأ بـ 01)";
-      phoneInput.focus();
-      return;
-    }
-
-    confirmBtn.classList.add("is-loading");
-    try {
-      const subRef = await addDoc(collection(db, "subscriptions"), {
-        uid: currentProfile.uid,
-        publicId: currentProfile.publicId || null,
-        name: currentProfile.fullName || "",
-        phone,
-        plan: pack.id,
-        planName: pack.name,
-        priceEGP: pack.priceEGP,
-        creditsGranted: pack.credits,
-        status: "pending",
-        createdAt: serverTimestamp()
-      });
-
-      const message = [
-        `السلام عليكم،`,
-        ``,
-        `عايز أشترك في باقة ${pack.name} على QeyasQuiz.`,
-        ``,
-        `الاسم: ${currentProfile.fullName || "—"}`,
-        `الـ ID: ${currentProfile.publicId || "—"}`,
-        `رقم الموبايل: ${phone}`,
-        `الباقة: ${pack.name} (${pack.credits} كريدت)`,
-        `السعر: ${pack.priceEGP} جنيه`,
-        `رقم الطلب: ${subRef.id}`
-      ].join("\n");
-
-      const waUrl = `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(message)}`;
-      window.open(waUrl, "_blank");
-
-      setTimeout(() => {
-        confirmBtn.classList.remove("is-loading");
-        openModal({
-          title: "تم إرسال طلبك",
-          body: el("div", { class: "stack-sm" }, [
-            el("p", { class: "text-secondary" }, [
-              document.createTextNode("لو واتساب مفتحش، كلّمنا على الرقم: ")
-            ]),
-            el("div", {
-              class: "card",
-              style: "text-align:center;padding:var(--sp-4);background:var(--gold-50);border-color:var(--gold-500)"
-            }, [el("div", { class: "support-transfer-number", style: "margin:0", text: SUPPORT_PHONE })]),
-            el("p", { class: "text-sm text-muted mt-3", text: "بعد ما تحوّل المبلغ وتأكدنا، رصيدك هيتحدّث تلقائيًا." })
-          ]),
-          actions: [{ label: "حسنًا", class: "btn-primary", onClick: () => navigate("/app/credits") }]
-        });
-      }, 500);
-    } catch (err) {
-      console.error("[checkout]", err);
-      confirmBtn.classList.remove("is-loading");
-      toast("فشل إنشاء الطلب. حاول مرة أخرى.", "error");
-    }
-  });
-
-  host.appendChild(actions);
-}
-
-/* ============================================================
-   STUDENT EXAM
+   EXAM RUNTIME + LEAVE GUARD
    ============================================================ */
 const EXAM_STATE_KEY = (id) => `qeyasquiz.attempt.${id}`;
 let examRuntime = null;
@@ -4485,12 +4091,13 @@ async function renderExam(params) {
   const loading = $("[data-exam-loading]");
   const shell = $("[data-exam-shell]");
   const errorBox = $("[data-exam-error]");
-  const entryModal = $("[data-entry-modal]");
 
-  loading.hidden = false; shell.hidden = true; errorBox.hidden = true; entryModal.hidden = true;
+  loading.hidden = false; shell.hidden = true; errorBox.hidden = true;
 
-  const oldLB = document.querySelector("[data-exam-leaderboard]");
-  if (oldLB) oldLB.remove();
+  if (!currentUser) {
+    navigate("/login");
+    return;
+  }
 
   if (!examId) {
     loading.hidden = true; errorBox.hidden = false;
@@ -4522,19 +4129,12 @@ async function renderExam(params) {
     return;
   }
 
-  const attempts = await listAttempts(examId);
   const status = computeStatus(exam);
-
-  if (shouldShowLeaderboard(exam, attempts)) {
-    loading.hidden = true;
-    renderLeaderboardPage(exam, attempts);
-    return;
-  }
 
   if (status === "paused") {
     loading.hidden = true; errorBox.hidden = false;
-    $("[data-exam-error-title]").textContent = "الامتحان متوقف مؤقتًا";
-    $("[data-exam-error-message]").textContent = "قام المعلم بإيقاف الامتحان. يرجى المحاولة لاحقًا.";
+    $("[data-exam-error-title]").textContent = "الامتحان متوقف مؤقتا";
+    $("[data-exam-error-message]").textContent = "قام المعلم بإيقاف الامتحان.";
     return;
   }
 
@@ -4548,300 +4148,38 @@ async function renderExam(params) {
   if (status === "completed") {
     loading.hidden = true; errorBox.hidden = false;
     $("[data-exam-error-title]").textContent = "الامتحان مغلق";
-    $("[data-exam-error-message]").textContent = "انتهى هذا الامتحان. سيتم عرض النتائج والمراكز بعد اكتمال التصحيح.";
+    $("[data-exam-error-message]").textContent = "انتهى هذا الامتحان.";
     return;
   }
 
-  const currentU = auth.currentUser;
-  if (currentU) {
-    try {
-      const existingAttempt = await getStudentAttempt(examId, currentU.uid);
-      if (existingAttempt) {
-        const s = existingAttempt.status;
-        if (s === "submitted" || s === "graded") {
-          loading.hidden = true; showEntryModal(exam, existingAttempt);
-          return;
-        }
-        loading.hidden = true;
-        $("[data-entry-modal]").hidden = true;
-        shell.hidden = false;
-        startExamRuntime(exam, { attempt: existingAttempt });
-        return;
-      }
-    } catch (err) { console.warn("[renderExam] check existing:", err); }
-  }
-
-  loading.hidden = true;
-  showEntryModal(exam);
-}
-
-/* ============================================================
-   STUDENT ENTRY MODAL
-   ============================================================ */
-let entryState = { exam: null, mode: "signed-out", attempt: null };
-
-async function showEntryModal(exam, existingAttempt = null) {
-  const modal = $("[data-entry-modal]");
-  if (!modal) return;
-
-  entryState = { exam, mode: "signed-out", attempt: existingAttempt };
-
-  const title = $("[data-entry-title]");
-  const meta = $("[data-entry-meta]");
-  const teacherBox = $("[data-entry-teacher]");
-  const teacherAvatar = $("[data-entry-teacher-avatar]");
-  const teacherName = $("[data-entry-teacher-name]");
-
-  title.textContent = exam.title || "امتحان";
-
-  if (exam.teacherName) {
-    teacherBox.hidden = false;
-    teacherAvatar.src = exam.teacherPhoto || "";
-    teacherAvatar.style.display = exam.teacherPhoto ? "block" : "none";
-    teacherName.textContent = exam.teacherName;
-  } else {
-    teacherBox.hidden = true;
-  }
-
-  meta.innerHTML = "";
-  [
-    ["المادة", subjectLabel(exam.subject)],
-    ["الصف", gradeLabel(exam.grade)],
-    ["المدة", `${exam.duration || 0} دقيقة`],
-    ["الأسئلة", String(exam.totalQuestions || 0)]
-  ].forEach(([k, v]) => {
-    const item = el("div", { class: "entry-meta-item" });
-    item.appendChild(el("span", { class: "entry-meta-label", text: k }));
-    item.appendChild(el("span", { class: "entry-meta-value", text: v }));
-    meta.appendChild(item);
-  });
-
-  modal.hidden = false;
-
-  if (existingAttempt) {
-    fillAlreadyTakenState(existingAttempt);
-    setEntryState("already-taken");
-    return;
-  }
-  await resolveEntryState();
-}
-
-async function resolveEntryState() {
-  const exam = entryState.exam;
-  const user = auth.currentUser;
-
-  if (!user) { setEntryState("signed-out"); return; }
-  if (entryState.attempt) { fillAlreadyTakenState(entryState.attempt); setEntryState("already-taken"); return; }
-
-  const existingAttempt = await getStudentAttempt(exam.id, user.uid);
-  if (existingAttempt) {
-    entryState.attempt = existingAttempt;
-    fillAlreadyTakenState(existingAttempt);
-    setEntryState("already-taken");
+  // Check existing attempt
+  const existing = await getStudentAttempt(examId, currentUser.uid);
+  if (existing) {
+    if (existing.status === "submitted" || existing.status === "graded") {
+      sessionStorage.setItem("qeyasquiz.lastAttempt", existing.id);
+      localStorage.setItem("qeyasquiz.lastAttempt", existing.id);
+      navigate("/result");
+      return;
+    }
+    loading.hidden = true; shell.hidden = false;
+    startExamRuntime(exam, { attempt: existing });
     return;
   }
 
-  const cachedStudent = getCachedStudentProfile();
-  let studentProfile = null;
-
-  if (cachedStudent && cachedStudent.uid === user.uid && cachedStudent.fullName) {
-    studentProfile = cachedStudent;
-    loadStudentProfile(user.uid).then((fresh) => {
-      if (fresh && fresh.fullName) cacheStudentProfile(fresh);
-    }).catch(() => {});
-  } else {
-    studentProfile = await loadStudentProfile(user.uid);
-  }
-
-  if (!studentProfile || !studentProfile.fullName) {
-    fillNeedNameState(user);
-    setEntryState("need-name");
+  // Create new attempt
+  const studentProfile = currentStudentProfile;
+  if (!studentProfile) {
+    loading.hidden = true; errorBox.hidden = false;
+    $("[data-exam-error-title]").textContent = "غير مسجل";
+    $("[data-exam-error-message]").textContent = "سجّل دخولك كطالب للمشاركة في الامتحان.";
     return;
   }
 
-  fillReadyState(user, studentProfile);
-  setEntryState("ready");
+  loading.hidden = true; shell.hidden = false;
+  const attempt = await createAttempt(exam, studentProfile.fullName, currentUser.uid);
+  startExamRuntime(exam, { attempt });
 }
 
-function setEntryState(mode) {
-  entryState.mode = mode;
-  const states = $$(".entry-state", $("[data-entry-modal]"));
-  states.forEach((s) => { s.hidden = s.dataset.entryState !== mode; });
-
-  const codeField = $("[data-entry-code-field]");
-  if (codeField) codeField.hidden = mode !== "ready" || !entryState.exam.requireAccessCode;
-}
-
-function fillNeedNameState(user) {
-  const avatar = $("[data-entry-user-avatar]");
-  const email = $("[data-entry-user-email]");
-  const input = $("[data-entry-name]");
-  const err = $("[data-entry-name-error]");
-
-  if (avatar) avatar.src = user.photoURL || "";
-  if (email) email.textContent = user.email || "";
-  if (input) {
-    input.value = user.displayName || "";
-    if (err) err.hidden = true;
-    setTimeout(() => input.focus(), 150);
-  }
-}
-
-function fillReadyState(user, profile) {
-  const avatar = $("[data-entry-ready-avatar]");
-  const name = $("[data-entry-ready-name]");
-  const email = $("[data-entry-ready-email]");
-  const codeInput = $("[data-entry-code]");
-  const codeErr = $("[data-entry-code-error]");
-
-  if (avatar) avatar.src = profile.photoURL || user.photoURL || "";
-  if (name) name.textContent = profile.fullName;
-  if (email) email.textContent = user.email || "";
-  if (codeInput) codeInput.value = "";
-  if (codeErr) codeErr.hidden = true;
-}
-
-function fillAlreadyTakenState(attempt) {
-  const card = $(".entry-already-card");
-  if (!card) return;
-
-  const icon = card.querySelector(".entry-already-icon");
-  const title = card.querySelector("h3");
-  const text = card.querySelector("p");
-  const info = $("[data-entry-attempt-info]");
-
-  const totalPossible = entryState.exam.totalScore || 0;
-  const isGraded = attempt.status === "graded" && attempt.gradedAt && attempt.score != null;
-
-  if (isGraded) {
-    icon.style.background = "var(--success-50)";
-    icon.style.color = "var(--success-500)";
-    icon.innerHTML = '<svg class="icon" width="48" height="48"><use href="#i-check-circle"></use></svg>';
-    title.textContent = "تم تصحيح الامتحان";
-    text.textContent = "يمكنك عرض النتيجة والورقة كاملة.";
-  } else {
-    icon.style.background = "var(--warning-50)";
-    icon.style.color = "var(--warning-500)";
-    icon.innerHTML = '<svg class="icon" width="48" height="48"><use href="#i-clock"></use></svg>';
-    title.textContent = "جارٍ التصحيح";
-    text.textContent = "الامتحان بانتظار تصحيح المعلم.";
-  }
-
-  info.innerHTML = "";
-  const rows = [
-    ["الاسم", attempt.studentName || "—"],
-    ["الحالة", isGraded ? "تم التصحيح" : "بانتظار التصحيح"],
-    ["وقت التسليم", attempt.submittedAt ? fmtDate(attempt.submittedAt) : "—"]
-  ];
-  if (isGraded) {
-    rows.push(["الدرجة", `${attempt.score} / ${totalPossible}`]);
-    rows.push(["النسبة", `${attempt.percentage || 0}%`]);
-  }
-
-  rows.forEach(([k, v]) => {
-    info.appendChild(el("div", { class: "row-between" }, [el("span", { text: k }), el("span", { text: v })]));
-  });
-
-  const viewBtn = $("[data-entry-view-result]");
-  if (viewBtn) {
-    const labelSpan = viewBtn.querySelector("span");
-    if (labelSpan) labelSpan.textContent = isGraded ? "عرض النتيجة والورقة" : "متابعة الحالة";
-  }
-}
-
-function bindEntryHandlers() {
-  const modal = $("[data-entry-modal]");
-  if (!modal || modal.dataset.bound) return;
-  modal.dataset.bound = "1";
-
-  const googleBtn = $("[data-entry-google]");
-  if (googleBtn) {
-    googleBtn.addEventListener("click", async () => {
-      googleBtn.classList.add("is-loading");
-      try { await signInWithGoogle(); await resolveEntryState(); }
-      catch (err) { toast(err.message || "تعذّر تسجيل الدخول", "error"); }
-      finally { googleBtn.classList.remove("is-loading"); }
-    });
-  }
-
-  const saveBtn = $("[data-entry-save-name]");
-  if (saveBtn) {
-    saveBtn.addEventListener("click", async () => {
-      const input = $("[data-entry-name]");
-      const err = $("[data-entry-name-error]");
-      const val = (input.value || "").trim();
-      const words = val.split(/\s+/).filter(Boolean);
-
-      if (words.length < 4) { err.hidden = false; err.textContent = "اكتب اسمك الرباعي (4 كلمات على الأقل)"; return; }
-      if (val.length > 120) { err.hidden = false; err.textContent = "الاسم طويل جدًا"; return; }
-
-      err.hidden = true;
-      saveBtn.classList.add("is-loading");
-      try {
-        const user = auth.currentUser;
-        const profile = await saveStudentProfile(user.uid, val);
-        currentStudentProfile = profile;
-        await resolveEntryState();
-      } catch { toast("تعذّر حفظ الاسم. حاول مرة أخرى.", "error"); }
-      finally { saveBtn.classList.remove("is-loading"); }
-    });
-  }
-
-  const startBtn = $("[data-entry-start]");
-  if (startBtn) {
-    startBtn.addEventListener("click", async () => {
-      const exam = entryState.exam;
-      const user = auth.currentUser;
-      if (!user) return;
-
-      if (exam.requireAccessCode) {
-        const codeInput = $("[data-entry-code]");
-        const codeErr = $("[data-entry-code-error]");
-        if ((codeInput.value || "").trim() !== (exam.accessCode || "")) {
-          codeErr.hidden = false; codeErr.textContent = "كود غير صحيح"; return;
-        }
-        codeErr.hidden = true;
-      }
-
-      const existing = await getStudentAttempt(exam.id, user.uid);
-      if (existing) {
-        entryState.attempt = existing;
-        fillAlreadyTakenState(existing);
-        setEntryState("already-taken");
-        return;
-      }
-
-      const studentProfile = currentStudentProfile || await loadStudentProfile(user.uid);
-      if (!studentProfile || !studentProfile.fullName) {
-        toast("حدث خطأ، حاول مرة أخرى", "error"); return;
-      }
-
-      startBtn.classList.add("is-loading");
-      try {
-        const attempt = await createAttempt(exam, studentProfile.fullName, user.uid);
-        modal.hidden = true;
-        $("[data-exam-shell]").hidden = false;
-        startExamRuntime(exam, { attempt });
-      } catch (err) { console.error(err); toast("تعذّر بدء الامتحان", "error"); startBtn.classList.remove("is-loading"); }
-    });
-  }
-
-  const viewBtn = $("[data-entry-view-result]");
-  if (viewBtn) {
-    viewBtn.addEventListener("click", () => {
-      if (entryState.attempt) {
-        sessionStorage.setItem("qeyasquiz.lastAttempt", entryState.attempt.id);
-        localStorage.setItem("qeyasquiz.lastAttempt", entryState.attempt.id);
-        $("[data-entry-modal]").hidden = true;
-        navigate("/result");
-      }
-    });
-  }
-}
-
-/* ============================================================
-   CREATE ATTEMPT
-   ============================================================ */
 async function createAttempt(exam, studentName, studentUid) {
   const forms = exam.forms && exam.forms.length
     ? exam.forms
@@ -4874,6 +4212,7 @@ async function createAttempt(exam, studentName, studentUid) {
     startedAt: serverTimestamp(),
     startedAtMs: nowMs, deadlineMs, resultCode,
     anticheatEvents: [],
+    chancesLeft: LEAVE_CONFIG.TOTAL_CHANCES,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp()
   };
@@ -4884,14 +4223,11 @@ async function createAttempt(exam, studentName, studentUid) {
   return { id: ref.id, ...payload, startedAtMs: nowMs, deadlineMs, resultCode };
 }
 
-/* ============================================================
-   EXAM RUNTIME
-   ============================================================ */
 function startExamRuntime(exam, opts) {
   const { attempt, preview = false } = opts;
   const safeAttempt = attempt || {
     id: null, studentName: "معاينة", formId: null,
-    answers: {}, questionOrder: null,
+    answers: {}, questionOrder: null, chancesLeft: LEAVE_CONFIG.TOTAL_CHANCES,
     deadlineMs: Date.now() + (exam.duration || 60) * 60000
   };
 
@@ -4918,16 +4254,17 @@ function startExamRuntime(exam, opts) {
     timerInterval: null, autosaveInterval: null, heartbeatInterval: null,
     watcherUnsub: null,
     dirty: false, submitted: false, pendingExam: null,
-    warningCount: 0, fsExitCount: 0,
-    fsGuardActive: exam.requireFullscreen !== false
+    chancesLeft: safeAttempt.chancesLeft ?? LEAVE_CONFIG.TOTAL_CHANCES,
+    isAway: false, awayTimer: null, awayCountdownInterval: null,
+    anticheatEvents: safeAttempt.anticheatEvents || []
   };
   examRuntime = state;
 
   $("[data-watermark-teacher]").textContent = preview
-    ? "معاينة · QeyasQuiz"
-    : `${safeAttempt.studentName || ""} · QeyasQuiz`;
+    ? "معاينة - QeyasQuiz"
+    : `${safeAttempt.studentName || ""} - QeyasQuiz`;
   $("[data-exam-title]").textContent = exam.title || "امتحان";
-  $("[data-exam-meta]").textContent = `${subjectLabel(exam.subject)} · ${gradeLabel(exam.grade)}`;
+  $("[data-exam-meta]").textContent = `${subjectLabel(exam.subject)} - ${gradeLabel(exam.grade)}`;
 
   $("[data-questions-scroll]").hidden = true;
   $("[data-questions-single]").hidden = true;
@@ -4941,12 +4278,23 @@ function startExamRuntime(exam, opts) {
   }
 
   startTimer();
+  updateChancesUI();
 
   if (!preview) {
-    startHeartbeat(); startAutosave(); startAnticheat();
-    if (state.fsGuardActive) startFullscreenGuard();
-    const initialMs = exam.updatedAt?.toMillis?.() || (exam.updatedAt?.seconds * 1000) || 0;
-    state.watcherUnsub = startExamRealtimeWatcher(exam.id, initialMs);
+    startHeartbeat();
+    startAutosave();
+    startLeaveGuard();
+    addExamNoise();
+    const wmInterval = addExamWatermark(safeAttempt.studentName, safeAttempt.id);
+    if (wmInterval) {
+      const prevCleanup = state._leaveCleanup;
+      state._leaveCleanup = () => {
+        if (prevCleanup) prevCleanup();
+        clearInterval(wmInterval);
+        document.getElementById("dynamicWatermark")?.remove();
+        document.getElementById("noiseOverlay")?.remove();
+      };
+    }
   }
 
   $("[data-exam-fullscreen]").onclick = () => {
@@ -4969,6 +4317,213 @@ function startExamRuntime(exam, opts) {
   };
   window.addEventListener("beforeunload", beforeUnloadHandler);
   state._beforeUnloadHandler = beforeUnloadHandler;
+}
+
+function updateChancesUI() {
+  const s = examRuntime;
+  if (!s) return;
+  const chancesEl = $("[data-exam-chances]");
+  const dotsEls = $$("[data-chances-dots] .exam-chances-dot");
+  dotsEls.forEach((dot, i) => {
+    dot.classList.toggle("is-used", i >= s.chancesLeft);
+  });
+  if (chancesEl) {
+    chancesEl.classList.remove("is-warning", "is-critical");
+    if (s.chancesLeft === 1) chancesEl.classList.add("is-critical");
+    else if (s.chancesLeft === 2) chancesEl.classList.add("is-warning");
+  }
+}
+
+function startLeaveGuard() {
+  const s = examRuntime;
+  if (!s || s.preview) return;
+
+  const countdownEl = $("[data-away-countdown]");
+
+  function logLeaveEvent(type, meta = {}) {
+    try {
+      s.anticheatEvents = s.anticheatEvents || [];
+      s.anticheatEvents.push({ type, at: Date.now(), chancesLeft: s.chancesLeft, ...meta });
+      if (s.anticheatEvents.length > 200) s.anticheatEvents.shift();
+      if (s.attempt?.id) {
+        updateDoc(doc(db, "attempts", s.attempt.id), {
+          anticheatEvents: s.anticheatEvents,
+          chancesLeft: s.chancesLeft
+        }).catch(() => {});
+      }
+    } catch {}
+  }
+
+  function showWarning() {
+    const modal = $("[data-leave-warning-modal]");
+    if (!modal) return;
+
+    const title = $("[data-leave-title]");
+    const text = $("[data-leave-text]");
+    const chancesContainer = $("[data-leave-chances]");
+
+    const lost = LEAVE_CONFIG.TOTAL_CHANCES - s.chancesLeft;
+
+    if (title) {
+      title.textContent = lost === 1 ? "خرجت من الامتحان!" : lost === 2 ? "تحذير أخير!" : "تم استهلاك كل الفرص";
+    }
+
+    if (text) {
+      if (s.chancesLeft > 0) {
+        text.textContent = `لقد خرجت من التطبيق لأكثر من ${LEAVE_CONFIG.GRACE_SECONDS} ثواني. تبقى لك ${s.chancesLeft} ${s.chancesLeft === 1 ? "فرصة" : "فرص"}.`;
+      } else {
+        text.textContent = "تم استهلاك جميع الفرص. جارٍ تسليم الامتحان تلقائيا...";
+      }
+    }
+
+    if (chancesContainer) {
+      chancesContainer.innerHTML = "";
+      for (let i = 1; i <= LEAVE_CONFIG.TOTAL_CHANCES; i++) {
+        const isLost = i <= lost;
+        const div = document.createElement("div");
+        div.className = "leave-chance" + (isLost ? " is-lost" : "");
+        div.textContent = isLost ? "" : String(i);
+        chancesContainer.appendChild(div);
+      }
+    }
+
+    modal.hidden = false;
+
+    if (s.chancesLeft === 0) {
+      const btn = $("[data-leave-continue]");
+      if (btn) btn.disabled = true;
+      setTimeout(() => {
+        modal.hidden = true;
+        toast("تم تسليم الامتحان لتجاوز حد الخروج", "error", 6000);
+        performSubmit("auto", "leave_chances_exhausted");
+      }, 2500);
+    }
+  }
+
+  function hideWarning() {
+    const modal = $("[data-leave-warning-modal]");
+    if (modal) modal.hidden = true;
+  }
+
+  function onAway() {
+    if (s.submitted || s.preview) return;
+    if (s.isAway) return;
+    s.isAway = true;
+
+    document.body.classList.add("exam-away");
+    logLeaveEvent("leave_start");
+
+    let remaining = LEAVE_CONFIG.GRACE_SECONDS;
+    if (countdownEl) countdownEl.textContent = String(remaining);
+
+    s.awayCountdownInterval = setInterval(() => {
+      remaining--;
+      if (countdownEl) countdownEl.textContent = String(Math.max(0, remaining));
+      if (remaining <= 0) {
+        clearInterval(s.awayCountdownInterval);
+        s.awayCountdownInterval = null;
+      }
+    }, 1000);
+
+    s.awayTimer = setTimeout(async () => {
+      s.chancesLeft = Math.max(0, s.chancesLeft - 1);
+      logLeaveEvent("leave_penalty", { chancesLeft: s.chancesLeft });
+      updateChancesUI();
+      showWarning();
+      if (s.chancesLeft === 0 && s.attempt?.id) {
+        try {
+          await updateDoc(doc(db, "attempts", s.attempt.id), {
+            chancesLeft: 0
+          });
+        } catch {}
+      }
+    }, LEAVE_CONFIG.GRACE_SECONDS * 1000);
+  }
+
+  function onBack() {
+    if (s.submitted || s.preview) return;
+    if (!s.isAway) return;
+    s.isAway = false;
+
+    document.body.classList.remove("exam-away");
+
+    if (s.awayCountdownInterval) {
+      clearInterval(s.awayCountdownInterval);
+      s.awayCountdownInterval = null;
+    }
+
+    if (s.awayTimer) {
+      clearTimeout(s.awayTimer);
+      s.awayTimer = null;
+      logLeaveEvent("leave_safe_return");
+    }
+  }
+
+  const onVisibility = () => {
+    if (document.hidden) onAway();
+    else onBack();
+  };
+  const onBlur = () => onAway();
+  const onFocus = () => onBack();
+
+  document.addEventListener("visibilitychange", onVisibility);
+  window.addEventListener("blur", onBlur);
+  window.addEventListener("focus", onFocus);
+
+  const continueBtn = $("[data-leave-continue]");
+  if (continueBtn) {
+    continueBtn.onclick = () => {
+      hideWarning();
+      logLeaveEvent("leave_acknowledged", { chancesLeft: s.chancesLeft });
+    };
+  }
+
+  s._leaveCleanup = () => {
+    document.removeEventListener("visibilitychange", onVisibility);
+    window.removeEventListener("blur", onBlur);
+    window.removeEventListener("focus", onFocus);
+    if (s.awayTimer) clearTimeout(s.awayTimer);
+    if (s.awayCountdownInterval) clearInterval(s.awayCountdownInterval);
+    document.body.classList.remove("exam-away");
+    const modal = $("[data-leave-warning-modal]");
+    if (modal) modal.hidden = true;
+  };
+}
+
+function addExamNoise() {
+  if (document.getElementById("noiseOverlay")) return;
+  const noise = document.createElement("div");
+  noise.id = "noiseOverlay";
+  document.body.appendChild(noise);
+}
+
+function addExamWatermark(studentName, studentUid) {
+  const existing = document.getElementById("dynamicWatermark");
+  if (existing) existing.remove();
+
+  const wm = document.createElement("div");
+  wm.id = "dynamicWatermark";
+
+  const text = `${studentName || "طالب"} - ${String(studentUid || "").slice(0, 8)} - QeyasQuiz`;
+
+  for (let i = 0; i < 6; i++) {
+    const span = document.createElement("span");
+    span.textContent = text;
+    span.style.top = `${Math.random() * 100}%`;
+    span.style.left = `${Math.random() * 100}%`;
+    wm.appendChild(span);
+  }
+
+  document.body.appendChild(wm);
+
+  const interval = setInterval(() => {
+    wm.querySelectorAll("span").forEach((span) => {
+      span.style.top = `${Math.random() * 100}%`;
+      span.style.left = `${Math.random() * 100}%`;
+    });
+  }, 5000);
+
+  return interval;
 }
 
 function renderScrollMode() {
@@ -5109,7 +4664,7 @@ function buildQuestionInputs(q, answers, qid, onChange) {
     if (q.type === "tf_just") frag.appendChild(buildJustification(q, answers, qid, onChange));
   } else if (q.type === "complete") {
     const input = el("input", { class: "q-complete-input", type: "text" });
-    input.placeholder = "اكتب إجابتك…";
+    input.placeholder = "اكتب إجابتك...";
     input.value = answers.textValue || "";
     input.addEventListener("input", debounce(() => {
       answers.textValue = input.value;
@@ -5118,7 +4673,7 @@ function buildQuestionInputs(q, answers, qid, onChange) {
     frag.appendChild(input);
   } else if (q.type === "essay") {
     const ta = el("textarea", { class: "q-essay-textarea" });
-    ta.placeholder = "اكتب إجابتك…";
+    ta.placeholder = "اكتب إجابتك...";
     ta.value = answers.essayText || "";
     ta.addEventListener("input", debounce(() => {
       answers.essayText = ta.value;
@@ -5134,10 +4689,10 @@ function buildJustification(q, answers, qid, onChange) {
   const box = el("div", { class: "q-justification" });
   const label = el("div", { class: "q-justification-label" });
   label.appendChild(svgIcon("check-square", 14));
-  label.appendChild(document.createTextNode("التبرير (تصحيح يدوي/AI)"));
+  label.appendChild(document.createTextNode("التبرير"));
   box.appendChild(label);
   const ta = el("textarea", { class: "q-justification-textarea" });
-  ta.placeholder = "اكتب تبريرك…";
+  ta.placeholder = "اكتب تبريرك...";
   ta.value = answers.justification || "";
   ta.addEventListener("input", debounce(() => {
     answers.justification = ta.value;
@@ -5179,6 +4734,7 @@ function startTimer() {
   const s = examRuntime;
   const elVal = $("[data-timer-value]");
   const elBox = $("[data-timer]");
+  if (!elVal || !elBox) return;
 
   function tick() {
     const remaining = s.deadlineMs - Date.now();
@@ -5226,291 +4782,6 @@ function startHeartbeat() {
   }, 15000);
 }
 
-function startAnticheat() {
-  const s = examRuntime;
-  if (!s) return;
-
-  const events = s.attempt.anticheatEvents = s.attempt.anticheatEvents || [];
-
-  let lastLog = {};
-  function logEvent(type, meta = null) {
-    if (s.submitted) return;
-    const now = Date.now();
-    if (lastLog[type] && now - lastLog[type] < 1000) return;
-    lastLog[type] = now;
-    const evt = { type, at: now, ...(meta || {}) };
-    events.push(evt);
-    if (events.length > 200) events.shift();
-    updateDoc(doc(db, "attempts", s.attempt.id), { anticheatEvents: events }).catch(() => {});
-  }
-
-  function securityAlert(titleText, msgText) {
-    const modal = $("[data-security-modal]");
-    if (!modal) return;
-    $("[data-security-title]").textContent = titleText;
-    $("[data-security-message]").textContent = msgText;
-    modal.hidden = false;
-    $("[data-security-ok]").onclick = () => { modal.hidden = true; };
-  }
-
-  let screenshotReleaseTimer = null;
-
-  function engageShield(reason) {
-    if (s.submitted || s.preview) return;
-    document.body.classList.add("screenshot-active");
-    if (reason) logEvent(reason);
-  }
-
-  function releaseShield(delay = 80) {
-    if (s.submitted || s.preview) return;
-    clearTimeout(screenshotReleaseTimer);
-    screenshotReleaseTimer = setTimeout(() => {
-      document.body.classList.remove("screenshot-active");
-    }, delay);
-  }
-
-  const onWindowBlur = () => { if (!s.submitted && !s.preview) engageShield("window_blur"); };
-  const onWindowFocus = () => { if (!s.submitted && !s.preview) { releaseShield(100); logEvent("window_focus"); } };
-
-  const onVisibility = () => {
-    if (s.submitted || s.preview) return;
-    if (document.hidden) {
-      engageShield(null);
-      s.warningCount = (s.warningCount || 0) + 1;
-      logEvent("tab_hidden", { warningNumber: s.warningCount });
-      const remaining = 3 - s.warningCount;
-
-      if (s.warningCount < 3) {
-        securityAlert(
-          `تحذير ${s.warningCount} من 3`,
-          `لقد تركت صفحة الامتحان. تحذير ${s.warningCount} من 3. ${
-            remaining === 1 ? "تحذير أخير! لو خرجت مرة أخرى سيتم تسليم ورقتك فورًا." 
-            : `باقي ${remaining} تحذيرات قبل التسليم التلقائي.`
-          }`
-        );
-      } else {
-        securityAlert("تجاوزت الحد", "لقد تجاوزت الحد المسموح من التحذيرات (3 مرات). سيتم تسليم ورقتك تلقائيًا الآن.");
-        setTimeout(async () => {
-          if (!s.submitted) {
-            toast("تم تسليم الامتحان لتجاوز حد التحذيرات", "error");
-            await performSubmit("auto", "too_many_warnings");
-          }
-        }, 2000);
-      }
-    } else {
-      releaseShield(100);
-      logEvent("tab_visible");
-    }
-  };
-
-  const onPrintScreen = (e) => {
-    if (s.submitted || s.preview) return;
-    if (e.key === "PrintScreen" || e.code === "PrintScreen") {
-      try { navigator.clipboard.writeText("").catch(() => {}); } catch {}
-      logEvent("printscreen_blocked");
-      toast("السكرين شوت غير مسموح أثناء الامتحان", "warning", 2500);
-    }
-  };
-
-  const onCopy = (e) => {
-    if (s.submitted || s.preview) return;
-    const t = e.target;
-    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
-    e.preventDefault();
-    try { e.clipboardData.setData("text/plain", ""); } catch {}
-    logEvent("copy_attempt");
-  };
-
-  const onCut = (e) => {
-    if (s.submitted || s.preview) return;
-    const t = e.target;
-    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
-    e.preventDefault();
-    logEvent("cut_attempt");
-  };
-
-  const onPaste = (e) => {
-    if (s.submitted) return;
-    const isOwnerPreview = s.preview && currentProfile && currentProfile.uid === s.exam.ownerId;
-    if (isOwnerPreview) return;
-    e.preventDefault(); e.stopPropagation();
-    try { if (e.clipboardData) e.clipboardData.setData("text/plain", ""); } catch {}
-    logEvent("paste_blocked");
-    toast("اللصق غير مسموح داخل الامتحان", "warning", 2500);
-    return false;
-  };
-
-  const onContextMenu = (e) => {
-    if (s.submitted || s.preview) return;
-    const t = e.target;
-    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
-    e.preventDefault();
-    logEvent("context_menu");
-  };
-
-  const onKeyDown = (e) => {
-    if (s.submitted || s.preview) return;
-    const ctrl = e.ctrlKey || e.metaKey;
-    const key = (e.key || "").toLowerCase();
-    const t = e.target;
-    const isInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA");
-
-    if (ctrl && ["c", "x", "a"].includes(key) && isInput) return;
-    if (ctrl && ["c", "x", "a", "s", "p", "u"].includes(key)) {
-      e.preventDefault(); e.stopPropagation(); logEvent("shortcut_" + key); return false;
-    }
-    if (key === "f12" || (ctrl && e.shiftKey && ["i", "j", "c"].includes(key))) {
-      e.preventDefault(); logEvent("devtools_attempt"); return false;
-    }
-  };
-
-  const onOffline = () => {
-    logEvent("offline");
-    const b = $("[data-offline-banner]"); if (b) b.hidden = false;
-    const i = $("[data-connection-indicator]"); if (i) i.classList.add("is-offline");
-  };
-
-  const onOnline = () => {
-    logEvent("online");
-    const b = $("[data-offline-banner]"); if (b) b.hidden = true;
-    const i = $("[data-connection-indicator]"); if (i) i.classList.remove("is-offline");
-  };
-
-  document.addEventListener("visibilitychange", onVisibility);
-  document.addEventListener("copy", onCopy, true);
-  document.addEventListener("cut", onCut, true);
-  document.addEventListener("paste", onPaste, true);
-  document.addEventListener("contextmenu", onContextMenu, true);
-  document.addEventListener("keydown", onKeyDown, true);
-  document.addEventListener("keyup", onPrintScreen);
-  window.addEventListener("blur", onWindowBlur);
-  window.addEventListener("focus", onWindowFocus);
-  window.addEventListener("offline", onOffline);
-  window.addEventListener("online", onOnline);
-
-  const devtoolsInterval = setInterval(() => {
-    if (s.submitted) return;
-    const wd = window.outerWidth - window.innerWidth;
-    const hd = window.outerHeight - window.innerHeight;
-    if (wd > 160 || hd > 160) logEvent("devtools_open");
-  }, 5000);
-
-  startMovingWatermark();
-
-  [document.querySelector("[data-questions-host-scroll]"),
-   document.querySelector("[data-single-question-host]")].forEach((x) => {
-    if (x) { x.style.userSelect = "none"; x.style.webkitUserSelect = "none"; }
-  });
-
-  s._anticheatCleanup = () => {
-    document.removeEventListener("visibilitychange", onVisibility);
-    document.removeEventListener("copy", onCopy, true);
-    document.removeEventListener("cut", onCut, true);
-    document.removeEventListener("paste", onPaste, true);
-    document.removeEventListener("contextmenu", onContextMenu, true);
-    document.removeEventListener("keydown", onKeyDown, true);
-    document.removeEventListener("keyup", onPrintScreen);
-    window.removeEventListener("blur", onWindowBlur);
-    window.removeEventListener("focus", onWindowFocus);
-    window.removeEventListener("offline", onOffline);
-    window.removeEventListener("online", onOnline);
-    clearInterval(devtoolsInterval);
-    clearTimeout(screenshotReleaseTimer);
-    document.body.classList.remove("screenshot-active");
-  };
-}
-
-function startMovingWatermark() {
-  const wm = document.querySelector(".exam-watermark");
-  if (!wm || wm.dataset.moving) return;
-  wm.dataset.moving = "1";
-
-  let lx = 0, ly = 0;
-  const interval = setInterval(() => {
-    let x, y, tries = 0;
-    do { x = Math.random() * 100 - 50; y = Math.random() * 100 - 50; tries++; }
-    while (Math.abs(x - lx) < 30 && Math.abs(y - ly) < 30 && tries < 10);
-    lx = x; ly = y;
-    wm.style.transform = `translate(${x}px, ${y}px)`;
-  }, 3000);
-
-  if (examRuntime) {
-    const prevCleanup = examRuntime._anticheatCleanup;
-    examRuntime._anticheatCleanup = () => {
-      if (prevCleanup) prevCleanup();
-      clearInterval(interval);
-    };
-  }
-}
-
-function startFullscreenGuard() {
-  const s = examRuntime;
-  if (!s || s.preview) return;
-  if (!document.documentElement.requestFullscreen && !document.documentElement.webkitRequestFullscreen) return;
-
-  const modal = $("[data-fullscreen-modal]");
-  const enterBtn = $("[data-enter-fullscreen]");
-  const warningEl = $("[data-fs-warning]");
-  if (!modal || !enterBtn) return;
-
-  function showFsModal() {
-    modal.hidden = false;
-    document.body.classList.add("fs-locked");
-    if (warningEl) {
-      if (s.fsExitCount === 0) warningEl.hidden = true;
-      else if (s.fsExitCount < 3) {
-        warningEl.hidden = false;
-        warningEl.textContent = `تحذير: خرجت من ملء الشاشة ${s.fsExitCount} مرة.`;
-      } else {
-        warningEl.hidden = false;
-        warningEl.textContent = `تحذير أخير: خرجت ${s.fsExitCount} مرات.`;
-      }
-    }
-  }
-
-  function hideFsModal() {
-    modal.hidden = true;
-    document.body.classList.remove("fs-locked");
-  }
-
-  enterBtn.onclick = async () => {
-    try {
-      const rootEl = document.documentElement;
-      if (rootEl.requestFullscreen) await rootEl.requestFullscreen({ navigationUI: "hide" });
-      else if (rootEl.webkitRequestFullscreen) await rootEl.webkitRequestFullscreen();
-    } catch { toast("تعذّر الدخول لملء الشاشة. جرّب متصفح تاني.", "error"); }
-  };
-
-  function onFsChange() {
-    if (s.submitted) return;
-    const isFs = !!document.fullscreenElement || !!document.webkitFullscreenElement;
-    if (isFs) hideFsModal();
-    else {
-      s.fsExitCount++;
-      s.anticheatEvents = s.anticheatEvents || [];
-      s.anticheatEvents.push({ type: "fullscreen_exit", at: Date.now(), count: s.fsExitCount });
-      updateDoc(doc(db, "attempts", s.attempt.id), { anticheatEvents: s.anticheatEvents }).catch(() => {});
-
-      if (s.fsExitCount > 3) {
-        toast("تم تسليم الامتحان لتجاوز حد الخروج من ملء الشاشة", "error");
-        performSubmit("auto", "fullscreen_exits");
-        return;
-      }
-      showFsModal();
-    }
-  }
-
-  document.addEventListener("fullscreenchange", onFsChange);
-  document.addEventListener("webkitfullscreenchange", onFsChange);
-
-  s._fsCleanup = () => {
-    document.removeEventListener("fullscreenchange", onFsChange);
-    document.removeEventListener("webkitfullscreenchange", onFsChange);
-  };
-
-  setTimeout(() => { if (!document.fullscreenElement) showFsModal(); }, 200);
-}
-
 function confirmSubmit() {
   const s = examRuntime;
   if (!s) return;
@@ -5521,8 +4792,8 @@ function confirmSubmit() {
   if (unanswered > 0) {
     const firstUnansweredIdx = s.orderedIds.findIndex((qid) => !isAnswered(s.answers[qid], s.byId[qid]));
     openModal({
-      title: `أسئلة بدون إجابة — ${unanswered}`,
-      body: `عندك ${unanswered} سؤال مش مجاوب عليه.`,
+      title: `أسئلة بدون إجابة - ${unanswered}`,
+      body: `عندك ${unanswered} سؤال بدون إجابة.`,
       actions: [
         { label: "إلغاء", class: "btn-ghost" },
         { label: "سلّم على أي حال", class: "btn-outline", onClick: () => actuallySubmit() },
@@ -5561,7 +4832,7 @@ async function actuallySubmit() { await performSubmit("manual"); }
 async function autoSubmit(reason) {
   const s = examRuntime;
   if (!s || s.submitted) return;
-  toast("انتهى الوقت. تم تسليم الامتحان تلقائيًا.", "warning");
+  toast("انتهى الوقت. تم تسليم الامتحان تلقائيا.", "warning");
   await performSubmit("auto", reason);
 }
 
@@ -5574,11 +4845,11 @@ async function performSubmit(kind = "manual", reason = null) {
   clearInterval(s.autosaveInterval);
   clearInterval(s.heartbeatInterval);
   if (s.watcherUnsub) { try { s.watcherUnsub(); } catch {} s.watcherUnsub = null; }
-  if (s._fsCleanup) { try { s._fsCleanup(); } catch {} }
   if (s._anticheatCleanup) { try { s._anticheatCleanup(); } catch {} }
+  if (s._leaveCleanup) { try { s._leaveCleanup(); } catch {} }
   if (s._beforeUnloadHandler) { try { window.removeEventListener("beforeunload", s._beforeUnloadHandler); } catch {} }
 
-  document.body.classList.remove("fs-locked");
+  document.body.classList.remove("exam-away");
   document.body.classList.remove("screenshot-active");
   try { if (document.fullscreenElement) document.exitFullscreen?.(); } catch {}
 
@@ -5601,80 +4872,235 @@ async function performSubmit(kind = "manual", reason = null) {
   } catch (err) {
     console.error(err);
     s.submitted = false;
-    const reasonText = !navigator.onLine ? "لا يوجد اتصال بالإنترنت — إجاباتك محفوظة محليًا"
-      : err?.code === "permission-denied" ? "انتهت صلاحية الجلسة — أعد تحميل الصفحة"
-      : err?.message || "خطأ غير معروف";
-    toast(`فشل التسليم: ${reasonText}`, "error", 8000);
+    toast("فشل التسليم. حاول مرة أخرى.", "error");
   }
 }
 
-function startExamRealtimeWatcher(examId, initialUpdatedAtMs) {
-  const unsub = onSnapshot(doc(db, "exams", examId), (snap) => {
-    if (!snap.exists()) return;
-    const newExam = { id: snap.id, ...snap.data() };
-    const newMs = newExam.updatedAt?.toMillis?.() || (newExam.updatedAt?.seconds * 1000) || 0;
-    const s = examRuntime;
-    if (!s || s.submitted || s.preview) return;
-    if (newMs > initialUpdatedAtMs) {
-      const structural = JSON.stringify(newExam.forms || newExam.questions || []) !==
-                        JSON.stringify(s.exam.forms || s.exam.questions || []);
-      if (structural) {
-        s.pendingExam = newExam;
-        const modal = $("[data-update-modal]");
-        if (modal && modal.hidden) {
-          modal.hidden = false;
-          $("[data-update-refresh]").onclick = () => { modal.hidden = true; applyExamUpdate(); };
+/* ============================================================
+   GRADING (single attempt)
+   ============================================================ */
+async function renderGrading(params) {
+  const examId = params?.get("exam");
+  const attemptId = params?.get("attempt");
+  const host = $("[data-grading-host]");
+  if (!host) return;
+  host.innerHTML = "";
+
+  if (!examId || !attemptId) {
+    host.appendChild(el("div", { class: "empty" }, [el("p", { text: "بيانات ناقصة." })]));
+    return;
+  }
+
+  const exam = await getExam(examId);
+  const aSnap = await getDoc(doc(db, "attempts", attemptId));
+  if (!exam || !aSnap.exists()) {
+    host.appendChild(el("div", { class: "empty" }, [el("p", { text: "غير موجود" })]));
+    return;
+  }
+
+  const answersMap = await getExamAnswers(examId);
+  const attempt = { id: attemptId, ...aSnap.data() };
+  const allQuestions = getAllExamQuestions(exam);
+  const answers = attempt.answers || {};
+  const manualScores = { ...(attempt.manualScores || {}) };
+  const feedback = { ...(attempt.feedback || {}) };
+  const perQ = attempt.perQuestionScores || {};
+  const totalPossible = allQuestions.reduce((s, q) => s + (Number(q.score) || 0), 0);
+
+  const head = el("div", { class: "card grading-student-head" });
+  const info = el("div", {});
+  info.appendChild(el("h2", { text: attempt.studentName || "طالب" }));
+  info.appendChild(el("p", { class: "text-muted text-sm", text: fmtDate(attempt.submittedAt) }));
+  head.appendChild(info);
+
+  const headActions = el("div", { class: "row" });
+  headActions.appendChild(el("span", { class: `badge badge-${attempt.status || "draft"}`, text: statusLabel(attempt.status || "draft") }));
+  const backBtn = el("button", { class: "btn btn-ghost btn-sm", type: "button", text: "السابق" });
+  backBtn.addEventListener("click", () => navigate(`/app/exam?id=${examId}`));
+  headActions.appendChild(backBtn);
+  head.appendChild(headActions);
+  host.appendChild(head);
+
+  const list = el("div", { class: "grading-answers" });
+  host.appendChild(list);
+
+  allQuestions.forEach((q, i) => {
+    const a = answers[q.id] || {};
+    const isManual = isEssay(q);
+    const key = answersMap[q.id] || {};
+
+    const card = el("div", { class: "grading-card" });
+    if (q.header) card.appendChild(el("div", { class: "q-header-text", text: q.header }));
+    card.appendChild(el("div", { class: "grading-question", text: `س${i + 1} - ${q.text}` }));
+
+    const ansBlock = el("div", { class: "grading-answer-block" });
+    ansBlock.appendChild(el("div", { class: "answer-label" }, [
+      svgIcon("user", 14), document.createTextNode("إجابة الطالب")
+    ]));
+
+    const isUnanswered = !isAnswered(a, q);
+
+    if (isUnanswered) {
+      const emptyBlock = el("div", { class: "essay-answer-block", style: "color:var(--danger-500);font-style:italic;text-align:center;font-weight:var(--fw-semibold)" });
+      emptyBlock.textContent = "الطالب لم يجب على السؤال";
+      ansBlock.appendChild(emptyBlock);
+    } else if (q.type === "essay") {
+      const essayBlock = el("div", { class: "essay-answer-block" });
+      essayBlock.textContent = a.essayText || "-";
+      ansBlock.appendChild(essayBlock);
+    } else {
+      let ansText = "";
+      if (q.type === "mcq" || q.type === "mcq_just") {
+        ansText = (a.selectedIndex != null && q.options?.[a.selectedIndex]) ? q.options[a.selectedIndex] : "-";
+      } else if (q.type === "tf" || q.type === "tf_just") {
+        ansText = a.boolValue === true ? "صح" : a.boolValue === false ? "خطأ" : "-";
+      } else if (q.type === "complete") {
+        ansText = a.textValue || "-";
+      }
+      ansBlock.appendChild(el("div", { text: ansText, style: "white-space:pre-wrap" }));
+
+      if (q.type === "mcq_just" || q.type === "tf_just") {
+        ansBlock.appendChild(el("div", { class: "answer-label mt-3" }, [
+          svgIcon("edit", 14), document.createTextNode("التبرير")
+        ]));
+        if (a.justification && a.justification.trim()) {
+          const jBlock = el("div", { class: "essay-answer-block" });
+          jBlock.textContent = a.justification;
+          ansBlock.appendChild(jBlock);
+        } else {
+          const emptyJ = el("div", { class: "essay-answer-block", style: "color:var(--text-muted);font-style:italic" });
+          emptyJ.textContent = "لم يكتب الطالب تبريرا";
+          ansBlock.appendChild(emptyJ);
         }
-      } else {
-        s.exam = { ...s.exam, ...newExam };
       }
     }
-  }, (err) => console.warn("[realtime]", err));
-  return unsub;
-}
+    card.appendChild(ansBlock);
 
-async function applyExamUpdate() {
-  const s = examRuntime;
-  if (!s || !s.pendingExam) return;
-  const newExam = s.pendingExam;
-  s.pendingExam = null;
-  s.exam = newExam;
+    if (q.type !== "essay") {
+      const corBlock = el("div", { class: "grading-answer-block" });
+      corBlock.appendChild(el("div", { class: "answer-label" }, [
+        svgIcon("check", 14), document.createTextNode("الإجابة الصحيحة")
+      ]));
+      let correctText = "-";
+      if (q.type === "mcq" || q.type === "mcq_just") correctText = q.options?.[key.correctIndex] || "-";
+      else if (q.type === "tf" || q.type === "tf_just") correctText = key.correctBool ? "صح" : "خطأ";
+      else if (q.type === "complete") correctText = key.correctText || "-";
+      corBlock.appendChild(el("div", { class: "grading-correct-answer", text: correctText }));
+      card.appendChild(corBlock);
+    }
 
-  const forms = newExam.forms && newExam.forms.length
-    ? newExam.forms
-    : [{ id: "A", name: "النموذج أ", questions: newExam.questions || [] }];
-  const form = forms.find((f) => f.id === s.attempt.formId) || forms[0];
-  const newQuestions = form.questions || [];
-  const byId = {};
-  newQuestions.forEach((q) => (byId[q.id] = q));
+    if (q.type === "essay" && key.modelAnswer) {
+      card.appendChild(el("div", { class: "answer-label" }, [
+        svgIcon("book", 14), document.createTextNode("الإجابة النموذجية")
+      ]));
+      const modelBlock = el("div", { class: "model-answer-block" });
+      modelBlock.textContent = key.modelAnswer;
+      card.appendChild(modelBlock);
+    }
 
-  const preserved = { ...s.answers };
-  const existingIds = new Set(newQuestions.map((q) => q.id));
-  const kept = (s.orderedIds || []).filter((id) => existingIds.has(id));
-  const newIds = newQuestions.map((q) => q.id).filter((id) => !kept.includes(id));
-  s.orderedIds = [...kept, ...newIds];
+    const scoreRow = el("div", { class: "grading-score-row" });
 
-  const visible = {};
-  s.orderedIds.forEach((qid) => { if (preserved[qid]) visible[qid] = preserved[qid]; });
-  s.answers = visible;
-  s.questions = newQuestions;
-  s.byId = byId;
-  if (s.index >= s.orderedIds.length) s.index = Math.max(0, s.orderedIds.length - 1);
+    if (!isManual) {
+      const autoInfo = el("div", { class: "text-sm", style: "margin-bottom:8px;color:var(--text-muted);width:100%" });
+      autoInfo.appendChild(el("span", { text: "التصحيح التلقائي: " }));
+      autoInfo.appendChild(el("strong", {
+        text: `${perQ[q.id] || 0} / ${q.score || 1}`,
+        style: "color:var(--text-primary)"
+      }));
+      card.appendChild(autoInfo);
+    }
 
-  $("[data-exam-title]").textContent = newExam.title || "امتحان";
-  $("[data-exam-meta]").textContent = `${subjectLabel(newExam.subject)} · ${gradeLabel(newExam.grade)}`;
-
-  if (s.displayMode === "single") { renderSingleNavList(); showSingleQuestion(s.index); }
-  else renderScrollMode();
-  updateProgress();
-
-  try {
-    await updateDoc(doc(db, "attempts", s.attempt.id), {
-      answers: s.answers, questionOrder: s.orderedIds, updatedAt: serverTimestamp()
+    scoreRow.appendChild(el("span", { class: "text-sm fw-semibold", text: "الدرجة:" }));
+    const num = el("input", {
+      type: "number", class: "input",
+      min: "0", max: String(q.score || 1), step: "0.5",
+      style: "max-width:100px"
     });
-  } catch {}
-  s.dirty = false;
-  toast("تم تحديث الامتحان", "info");
+
+    const existingManual = manualScores[q.id];
+    if (existingManual != null) num.value = existingManual;
+    else if (isManual) num.value = 0;
+    else num.value = Number(perQ[q.id] || 0);
+
+    num.addEventListener("input", () => { manualScores[q.id] = Number(num.value) || 0; });
+    scoreRow.appendChild(num);
+    scoreRow.appendChild(el("span", { class: "text-sm text-muted", text: `/ ${q.score || 1}` }));
+
+    card.appendChild(scoreRow);
+
+    const fbField = el("div", { class: "field mt-3" });
+    fbField.appendChild(el("label", { class: "field-label", text: "ملاحظة" }));
+    const fbInput = el("input", { type: "text", class: "input", value: feedback[q.id] || "" });
+    fbInput.addEventListener("input", () => { feedback[q.id] = fbInput.value; });
+    fbField.appendChild(fbInput);
+    card.appendChild(fbField);
+
+    list.appendChild(card);
+  });
+
+  const fbCard = el("div", { class: "card" });
+  fbCard.appendChild(el("label", { class: "field-label mb-2", text: "ملاحظات عامة" }));
+  const fbTa = el("textarea", { class: "textarea" });
+  fbTa.value = attempt.examFeedback || "";
+  fbCard.appendChild(fbTa);
+  host.appendChild(fbCard);
+
+  function computeFinalScore() {
+    let total = 0;
+    allQuestions.forEach((q) => {
+      if (manualScores[q.id] != null) total += Number(manualScores[q.id]) || 0;
+      else total += Number(perQ[q.id] || 0);
+    });
+    return total;
+  }
+
+  async function saveGrading() {
+    const finalScore = computeFinalScore();
+    await updateDoc(doc(db, "attempts", attemptId), {
+      manualScores, feedback,
+      examFeedback: fbTa.value,
+      score: finalScore,
+      percentage: totalPossible ? Math.round((finalScore / totalPossible) * 100) : 0,
+      gradedAt: serverTimestamp(),
+      gradedBy: currentProfile.uid,
+      status: "graded"
+    });
+  }
+
+  const actions = el("div", { class: "card row-between" });
+  const totalInfo = el("div", {});
+  totalInfo.appendChild(el("div", { class: "text-sm text-muted", text: "الدرجة الكلية" }));
+  totalInfo.appendChild(el("div", { class: "fw-bold text-lg", text: String(totalPossible) }));
+  actions.appendChild(totalInfo);
+
+  const actRow = el("div", { class: "row" });
+  const saveBtn = el("button", { class: "btn btn-outline", type: "button", text: "حفظ التصحيح" });
+  saveBtn.addEventListener("click", async () => {
+    try {
+      await saveGrading();
+      toast("تم حفظ التصحيح", "success");
+    } catch (err) {
+      console.error(err);
+      toast("فشل حفظ التصحيح", "error");
+    }
+  });
+  actRow.appendChild(saveBtn);
+
+  const publishBtn = el("button", { class: "btn btn-primary", type: "button", text: "نشر هذه النتيجة" });
+  publishBtn.addEventListener("click", async () => {
+    try {
+      await saveGrading();
+      await updateDoc(doc(db, "exams", examId), { resultPublishedAt: serverTimestamp() });
+      toast("تم نشر النتيجة", "success");
+      navigate(`/app/exam?id=${examId}`);
+    } catch (err) {
+      console.error(err);
+      toast("فشل النشر", "error");
+    }
+  });
+  actRow.appendChild(publishBtn);
+  actions.appendChild(actRow);
+  host.appendChild(actions);
 }
 
 /* ============================================================
@@ -5736,7 +5162,7 @@ async function renderResultContent(attempt, exam) {
 
   $("[data-result-status]").textContent = statusLabel(attempt.status || "submitted");
   $("[data-result-exam-title]").textContent = exam.title || "امتحان";
-  $("[data-result-meta]").textContent = `${subjectLabel(exam.subject)} · ${gradeLabel(exam.grade)} · ${attempt.studentName || ""}`;
+  $("[data-result-meta]").textContent = `${subjectLabel(exam.subject)} - ${gradeLabel(exam.grade)} - ${attempt.studentName || ""}`;
 
   const scoreBlock = $("[data-score-block]");
   const waitingBlock = $("[data-waiting-block]");
@@ -5795,7 +5221,7 @@ async function renderResultContent(attempt, exam) {
     const wrap = el("div", { class: "review-answers" });
     const isUnanswered = !isAnswered(a, q);
 
-    let studentText = "—";
+    let studentText = "-";
     let studentCls = "is-wrong";
 
     if (isUnanswered) {
@@ -5809,9 +5235,9 @@ async function renderResultContent(attempt, exam) {
         if (a.boolValue === true) studentText = "صح";
         else if (a.boolValue === false) studentText = "خطأ";
       } else if (q.type === "complete") {
-        studentText = (a.textValue && a.textValue.trim()) ? a.textValue : "—";
+        studentText = (a.textValue && a.textValue.trim()) ? a.textValue : "-";
       } else if (q.type === "essay") {
-        studentText = (a.essayText && a.essayText.trim()) ? a.essayText : "—";
+        studentText = (a.essayText && a.essayText.trim()) ? a.essayText : "-";
       }
     }
 
@@ -5821,20 +5247,13 @@ async function renderResultContent(attempt, exam) {
     ]));
 
     if (q.type !== "essay") {
-      let correctText = "—";
-      if (q.type === "mcq" || q.type === "mcq_just") correctText = q.options?.[key.correctIndex] || "—";
+      let correctText = "-";
+      if (q.type === "mcq" || q.type === "mcq_just") correctText = q.options?.[key.correctIndex] || "-";
       else if (q.type === "tf" || q.type === "tf_just") correctText = key.correctBool ? "صح" : "خطأ";
-      else if (q.type === "complete") correctText = key.correctText || "—";
+      else if (q.type === "complete") correctText = key.correctText || "-";
       wrap.appendChild(el("div", { class: "review-answer is-correct" }, [
         el("strong", { text: "الإجابة الصحيحة" }),
         el("div", { text: correctText, style: "white-space:pre-wrap" })
-      ]));
-    }
-
-    if (q.type === "essay" && key.modelAnswer) {
-      wrap.appendChild(el("div", { class: "review-answer is-correct" }, [
-        el("strong", { text: "الإجابة النموذجية" }),
-        el("div", { text: key.modelAnswer, style: "white-space:pre-wrap" })
       ]));
     }
 
@@ -5842,13 +5261,6 @@ async function renderResultContent(attempt, exam) {
       wrap.appendChild(el("div", { class: "review-answer" }, [
         el("strong", { text: "تبريرك" }),
         el("div", { text: a.justification, style: "white-space:pre-wrap" })
-      ]));
-    }
-
-    if ((q.type === "mcq_just" || q.type === "tf_just") && key.justificationModelAnswer) {
-      wrap.appendChild(el("div", { class: "review-answer is-correct" }, [
-        el("strong", { text: "التبرير النموذجي" }),
-        el("div", { text: key.justificationModelAnswer, style: "white-space:pre-wrap" })
       ]));
     }
 
@@ -5865,29 +5277,427 @@ async function renderResultContent(attempt, exam) {
 }
 
 /* ============================================================
+   PROFILE PAGES
+   ============================================================ */
+function renderTeacherProfile() {
+  if (!currentProfile) return;
+  updateUserUI();
+}
+
+/* ============================================================
+   SETTINGS
+   ============================================================ */
+function renderSettings() {
+  $$("[data-setting-theme]").forEach((r) => {
+    r.checked = r.value === currentTheme;
+    if (!r.dataset.bound) {
+      r.dataset.bound = "1";
+      r.addEventListener("change", () => { if (r.checked) setTheme(r.value); });
+    }
+  });
+
+  $$("[data-setting-three]").forEach((r) => {
+    r.checked = r.value === currentThree;
+    if (!r.dataset.bound) {
+      r.dataset.bound = "1";
+      r.addEventListener("change", () => {
+        if (!r.checked) return;
+        setThree(r.value);
+        if (r.value === "on") setTimeout(() => location.reload(), 150);
+      });
+    }
+  });
+}
+
+/* ============================================================
+   CREDITS PAGE
+   ============================================================ */
+async function renderCreditsPage() {
+  const host = $("[data-credits-page]");
+  if (!host) return;
+
+  const balance = currentCredits?.balance ?? 0;
+  const totalAdded = currentCredits?.totalAdded ?? 0;
+  const totalSpent = currentCredits?.totalSpent ?? 0;
+  const plan = currentProfile?.subscription?.plan || "free";
+  const expiry = currentProfile?.subscription?.expiresAt;
+  const isLow = balance > 0 && balance < 20;
+
+  host.innerHTML = "";
+
+  const hero = el("div", { class: "credits-hero" });
+  hero.appendChild(el("div", { class: "credits-hero-label", text: "رصيدك الحالي" }));
+  const heroVal = el("div", { class: "credits-hero-value" });
+  heroVal.appendChild(document.createTextNode(String(balance)));
+  hero.appendChild(heroVal);
+  const heroPlan = el("div", { class: "credits-hero-plan" });
+  heroPlan.appendChild(svgIcon("star", 14));
+  heroPlan.appendChild(document.createTextNode(`باقة: ${planLabel(plan)}`));
+  if (plan !== "free" && expiry) heroPlan.appendChild(document.createTextNode(` - ينتهي: ${fmtDateShort(expiry)}`));
+  hero.appendChild(heroPlan);
+  host.appendChild(hero);
+
+  if (isLow) {
+    const warn = el("div", {
+      style: "padding:12px 16px;background:var(--warning-50);color:var(--warning-600);border:1px solid var(--warning-500);border-radius:var(--r-md);font-size:var(--fs-sm);font-weight:var(--fw-semibold)"
+    });
+    warn.textContent = "رصيدك منخفض - يُنصح بشراء باقة قبل الامتحانات القادمة.";
+    host.appendChild(warn);
+  }
+
+  const statsGrid = el("div", { class: "credits-stats" });
+  [
+    ["إجمالي المشحون", totalAdded],
+    ["إجمالي المستهلك", totalSpent]
+  ].forEach(([label, value]) => {
+    const s = el("div", { class: "credits-stat" });
+    s.appendChild(el("div", { class: "credits-stat-value", text: String(value) }));
+    s.appendChild(el("div", { class: "credits-stat-label", text: label }));
+    statsGrid.appendChild(s);
+  });
+  host.appendChild(statsGrid);
+
+  const cta = el("div", { class: "credits-cta" });
+  const buyBtn = el("button", { type: "button", class: "btn btn-gold btn-lg" });
+  buyBtn.appendChild(svgIcon("credit-card", 18));
+  buyBtn.appendChild(document.createTextNode(" اشتر باقة"));
+  buyBtn.addEventListener("click", () => navigate("/app/subscription"));
+  cta.appendChild(buyBtn);
+  host.appendChild(cta);
+
+  host.appendChild(el("h3", { class: "builder-panel-title mt-6", text: "سجل المعاملات" }));
+  const txHost = el("div", { class: "transactions-list" });
+  txHost.appendChild(el("div", { class: "sk-card" }, [
+    el("div", { class: "skeleton sk-line sk-sm" }),
+    el("div", { class: "skeleton sk-line sk-sm" })
+  ]));
+  host.appendChild(txHost);
+
+  try {
+    const txns = await loadTransactions(currentProfile.uid, 50);
+    txHost.innerHTML = "";
+    if (!txns.length) {
+      txHost.appendChild(el("div", { class: "empty", style: "padding:var(--sp-6)" }, [
+        el("p", { class: "text-muted", text: "لا يوجد معاملات بعد." })
+      ]));
+      return;
+    }
+    txns.forEach((tx) => {
+      const row = el("div", { class: "transaction-row" });
+      const isAdd = tx.amount > 0;
+      const icon = el("div", { class: `transaction-icon ${isAdd ? "is-add" : "is-spend"}` });
+      icon.appendChild(svgIcon(isAdd ? "plus" : "minus", 18));
+      row.appendChild(icon);
+
+      const info = el("div", { class: "transaction-info" });
+      const label = tx.note || (isAdd ? "إضافة رصيد" : sourceLabel(tx.source));
+      info.appendChild(el("div", { class: "transaction-label", text: label }));
+      info.appendChild(el("div", { class: "transaction-time", text: fmtDate(tx.createdAt) }));
+      row.appendChild(info);
+
+      row.appendChild(el("div", {
+        class: `transaction-amount ${isAdd ? "is-add" : "is-spend"}`,
+        text: `${isAdd ? "+" : ""}${tx.amount}`
+      }));
+      txHost.appendChild(row);
+    });
+  } catch {
+    txHost.innerHTML = "";
+  }
+}
+
+function sourceLabel(src) {
+  return {
+    signup: "رصيد ترحيبي",
+    manual_admin: "إضافة من الدعم",
+    subscription: "اشتراك باقة",
+    ai_grade_batch: "تصحيح AI"
+  }[src] || "استخدام AI";
+}
+
+/* ============================================================
+   SUBSCRIPTION PAGE
+   ============================================================ */
+function renderSubscriptionPage() {
+  const host = $("[data-subscription-page]");
+  if (!host) return;
+
+  const currentPlan = currentProfile?.subscription?.plan || "free";
+  const expiry = currentProfile?.subscription?.expiresAt;
+
+  host.innerHTML = "";
+
+  const header = el("div", { style: "text-align:center;padding:var(--sp-6) 0" });
+  header.appendChild(el("h1", { style: "font-size:var(--fs-3xl);margin-bottom:var(--sp-2)", text: "اختر باقتك" }));
+  header.appendChild(el("p", { class: "text-secondary", text: "الاشتراك شهري، يتم التجديد يدويا بالتواصل مع الدعم." }));
+  if (currentPlan !== "free" && expiry) {
+    const sub = el("p", { class: "text-muted text-sm mt-3" });
+    sub.textContent = `باقتك الحالية: ${planLabel(currentPlan)} - تنتهي ${fmtDateShort(expiry)}`;
+    header.appendChild(sub);
+  }
+  host.appendChild(header);
+
+  const grid = el("div", { class: "pricing-grid" });
+  const packs = Object.values(CREDIT_PACKS).sort((a, b) => a.order - b.order);
+
+  packs.forEach((p) => {
+    const isCurrent = p.id === currentPlan;
+    const card = el("article", { class: `pricing-card ${p.badge ? "is-featured" : ""} ${isCurrent ? "is-current" : ""}` });
+    if (p.badge) card.appendChild(el("div", { class: "pricing-badge", text: p.badge }));
+    if (isCurrent) card.appendChild(el("div", { class: "pricing-current-badge", text: "الحالية" }));
+
+    const head = el("div", { class: "pricing-head" });
+    head.appendChild(el("h3", { class: "pricing-name", text: p.name }));
+    head.appendChild(el("p", { class: "pricing-desc", text: p.description }));
+    card.appendChild(head);
+
+    const price = el("div", { class: "pricing-price" });
+    price.appendChild(el("span", { class: "pricing-amount", text: String(p.priceEGP) }));
+    price.appendChild(el("span", { class: "pricing-currency", text: "جنيه" }));
+    price.appendChild(el("span", { class: "pricing-period", text: "/ شهريا" }));
+    card.appendChild(price);
+
+    const feats = el("ul", { class: "pricing-features" });
+    const listItems = [
+      `${p.credits} كريدت AI Qeyas`,
+      "امتحانات غير محدودة",
+      "تصحيح تلقائي للموضوعي",
+      "نماذج متعددة",
+      "مراقبة ضد الغش"
+    ];
+    if (p.id !== "free") listItems.push("تحليلات متقدمة");
+    listItems.forEach((f) => {
+      const li = el("li");
+      li.appendChild(svgIcon("check", 16));
+      li.appendChild(el("span", { text: f }));
+      feats.appendChild(li);
+    });
+    card.appendChild(feats);
+
+    if (isCurrent && p.id !== "free") {
+      const renewBtn = el("button", {
+        type: "button", class: "btn btn-outline btn-block", text: "تجديد الباقة",
+        onclick: () => navigate(`/app/checkout?plan=${p.id}`)
+      });
+      card.appendChild(renewBtn);
+    } else if (p.id === "free") {
+      card.appendChild(el("button", {
+        type: "button", class: "btn btn-outline btn-block",
+        text: isCurrent ? "باقتك الحالية" : "الباقة المجانية",
+        disabled: "disabled"
+      }));
+    } else {
+      card.appendChild(el("button", {
+        type: "button", class: "btn btn-gold btn-block", text: "اشترك الآن",
+        onclick: () => navigate(`/app/checkout?plan=${p.id}`)
+      }));
+    }
+
+    grid.appendChild(card);
+  });
+
+  host.appendChild(grid);
+}
+
+/* ============================================================
+   CHECKOUT PAGE
+   ============================================================ */
+function renderCheckoutPage() {
+  const host = $("[data-checkout-page]");
+  if (!host) return;
+
+  const planId = currentParams?.get("plan");
+  const pack = CREDIT_PACKS[planId];
+  if (!pack || pack.id === "free") { navigate("/app/subscription"); return; }
+
+  host.innerHTML = "";
+
+  const summary = el("div", { class: "checkout-summary" });
+  summary.appendChild(el("div", {
+    style: "font-size:var(--fs-lg);font-weight:var(--fw-bold);margin-bottom:var(--sp-3)",
+    text: "ملخص الطلب"
+  }));
+  [
+    ["الباقة", pack.name],
+    ["الرصيد", `${pack.credits} كريدت`],
+    ["المدة", "شهر واحد"]
+  ].forEach(([k, v]) => {
+    summary.appendChild(el("div", { class: "checkout-summary-row" }, [
+      el("span", { text: k }), el("strong", { text: v })
+    ]));
+  });
+  summary.appendChild(el("div", { class: "checkout-summary-divider" }));
+  const totalRow = el("div", { class: "checkout-summary-total" });
+  totalRow.appendChild(el("span", { text: "الإجمالي" }));
+  totalRow.appendChild(el("span", { text: `${pack.priceEGP} جنيه` }));
+  summary.appendChild(totalRow);
+  host.appendChild(summary);
+
+  const form = el("div", { class: "checkout-form" });
+
+  const nameField = el("div", { class: "field" });
+  nameField.appendChild(el("label", { class: "field-label", text: "الاسم" }));
+  const nameInput = el("input", { type: "text", class: "input", readonly: "readonly" });
+  nameInput.value = currentProfile?.fullName || "";
+  nameField.appendChild(nameInput);
+  form.appendChild(nameField);
+
+  const idField = el("div", { class: "field" });
+  idField.appendChild(el("label", { class: "field-label", text: "الـ ID" }));
+  const idInput = el("input", { type: "text", class: "input", readonly: "readonly" });
+  idInput.value = currentProfile?.publicId ? String(currentProfile.publicId) : "-";
+  idField.appendChild(idInput);
+  form.appendChild(idField);
+
+  const phoneField = el("div", { class: "field" });
+  const phoneLabel = el("label", { class: "field-label" });
+  phoneLabel.appendChild(document.createTextNode("رقم الموبايل "));
+  phoneLabel.appendChild(el("span", { class: "text-danger", text: "*" }));
+  phoneField.appendChild(phoneLabel);
+  const phoneInput = el("input", {
+    type: "tel", class: "input", placeholder: "01xxxxxxxxx",
+    inputmode: "numeric", maxlength: "11"
+  });
+  phoneField.appendChild(phoneInput);
+  form.appendChild(phoneField);
+
+  host.appendChild(form);
+
+  const note = el("div", { class: "checkout-whatsapp-note" });
+  note.appendChild(svgIcon("info", 18));
+  note.appendChild(el("div", {}, [
+    el("strong", { text: "الخطوة الجاية: " }),
+    document.createTextNode(`هيتم تحويلك على واتساب لرقم الدعم ${SUPPORT_PHONE} مع تفاصيل طلبك.`)
+  ]));
+  host.appendChild(note);
+
+  const actions = el("div", { class: "row", style: "gap:var(--sp-3);flex-wrap:wrap" });
+  const backBtn = el("button", {
+    type: "button", class: "btn btn-ghost btn-lg", text: "رجوع",
+    onclick: () => navigate("/app/subscription")
+  });
+  actions.appendChild(backBtn);
+
+  const confirmBtn = el("button", { type: "button", class: "btn btn-gold btn-lg flex-1", style: "min-width:200px" });
+  confirmBtn.appendChild(svgIcon("whatsapp", 18));
+  confirmBtn.appendChild(document.createTextNode(" تأكيد واشترك"));
+  actions.appendChild(confirmBtn);
+
+  confirmBtn.addEventListener("click", async () => {
+    const phone = (phoneInput.value || "").trim();
+    if (!validPhone(phone)) {
+      toast("أدخل رقم موبايل مصري صحيح", "warning");
+      return;
+    }
+
+    confirmBtn.classList.add("is-loading");
+    try {
+      const subRef = await addDoc(collection(db, "subscriptions"), {
+        uid: currentProfile.uid,
+        publicId: currentProfile.publicId || null,
+        name: currentProfile.fullName || "",
+        phone,
+        plan: pack.id,
+        planName: pack.name,
+        priceEGP: pack.priceEGP,
+        creditsGranted: pack.credits,
+        status: "pending",
+        createdAt: serverTimestamp()
+      });
+
+      const message = [
+        `السلام عليكم،`,
+        ``,
+        `عايز أشترك في باقة ${pack.name} على QeyasQuiz.`,
+        ``,
+        `الاسم: ${currentProfile.fullName || "-"}`,
+        `الـ ID: ${currentProfile.publicId || "-"}`,
+        `رقم الموبايل: ${phone}`,
+        `الباقة: ${pack.name} (${pack.credits} كريدت)`,
+        `السعر: ${pack.priceEGP} جنيه`,
+        `رقم الطلب: ${subRef.id}`
+      ].join("\n");
+
+      const waUrl = `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(message)}`;
+      window.open(waUrl, "_blank");
+
+      setTimeout(() => {
+        confirmBtn.classList.remove("is-loading");
+        openModal({
+          title: "تم إرسال طلبك",
+          body: el("div", { class: "stack-sm" }, [
+            el("p", { class: "text-secondary" }, [document.createTextNode("لو واتساب مفتحش، كلمنا على الرقم: ")]),
+            el("div", { class: "card", style: "text-align:center;padding:var(--sp-4)" }, [
+              el("div", { class: "mono fw-bold", style: "font-size:var(--fs-xl);color:var(--brand-500)", text: SUPPORT_PHONE })
+            ])
+          ]),
+          actions: [{ label: "حسنا", class: "btn-primary", onClick: () => navigate("/app/credits") }]
+        });
+      }, 500);
+    } catch (err) {
+      console.error("[checkout]", err);
+      confirmBtn.classList.remove("is-loading");
+      toast("فشل إنشاء الطلب", "error");
+    }
+  });
+
+  host.appendChild(actions);
+}
+
+/* ============================================================
    DELETE ACCOUNT
    ============================================================ */
 async function deleteAccountFlow() {
   if (!currentUser || !currentProfile) return;
 
-  const step1 = await showDeleteStep1();
+  const step1 = await new Promise((resolve) => {
+    openModal({
+      title: "حذف الحساب",
+      body: el("div", { class: "stack-sm" }, [
+        el("p", { class: "text-secondary", text: "هل أنت متأكد من رغبتك في حذف حسابك؟" }),
+        el("div", { class: "card", style: "padding:var(--sp-4);background:var(--danger-50);border-color:var(--danger-500)" }, [
+          el("p", { class: "text-sm fw-semibold text-danger", text: "سيتم حذف ما يلي نهائيا:" }),
+          el("ul", { style: "margin-top:8px;padding-inline-start:20px;line-height:2;font-size:var(--fs-sm)" }, [
+            el("li", { text: "جميع امتحاناتك" }),
+            el("li", { text: "جميع محاولات الطلاب" }),
+            el("li", { text: "جميع الإجابات والنتائج" }),
+            el("li", { text: "رصيد الكريدت وسجل المعاملات" }),
+            el("li", { text: "ملفك الشخصي" })
+          ])
+        ])
+      ]),
+      actions: [
+        { label: "إلغاء", class: "btn-ghost", onClick: () => resolve(false) },
+        { label: "متابعة", class: "btn-danger", onClick: () => resolve(true) }
+      ],
+      onClose: () => resolve(false)
+    });
+  });
   if (!step1) return;
 
-  showGlobalLoading("جارٍ التحقق من هويتك…");
-  let reauthUser = null;
-  try { reauthUser = await signInWithGoogle(); }
-  catch { hideGlobalLoading(); toast("تم إلغاء العملية", "warning"); return; }
-  hideGlobalLoading();
+  const password = await new Promise((resolve) => {
+    const input = el("input", { type: "password", class: "input", placeholder: "كلمة المرور" });
+    openModal({
+      title: "تأكيد نهائي",
+      body: el("div", { class: "stack-sm" }, [
+        el("p", { class: "text-secondary fw-semibold", text: "أدخل كلمة المرور للتأكيد. هذه العملية لا يمكن التراجع عنها." }),
+        el("div", { class: "field" }, [input])
+      ]),
+      actions: [
+        { label: "إلغاء", class: "btn-ghost", onClick: () => resolve(null) },
+        { label: "حذف نهائي", class: "btn-danger", onClick: () => resolve(input.value) }
+      ],
+      onClose: () => resolve(null)
+    });
+  });
+  if (!password) return;
 
-  if (!reauthUser || reauthUser.uid !== currentUser.uid) {
-    toast("يجب تسجيل الدخول بنفس الحساب", "error"); return;
-  }
+  showGlobalLoading("جارٍ حذف الحساب...");
 
-  const step2 = await showDeleteStep2();
-  if (!step2) return;
-
-  showGlobalLoading("جارٍ حذف الحساب…");
   try {
+    const cred = EmailAuthProvider.credential(auth.currentUser.email, password);
+    await reauthenticateWithCredential(auth.currentUser, cred);
+
     const uidV = currentUser.uid;
     const normalized = currentProfile.normalizedUsername;
     const publicId = currentProfile.publicId;
@@ -5902,13 +5712,7 @@ async function deleteAccountFlow() {
           try { await deleteDoc(doc(db, "attempts", aDoc.id)); } catch {}
         }
       } catch {}
-    }
-
-    for (const examId of examIds) {
       try { await deleteDoc(doc(db, "examAnswers", examId)); } catch {}
-    }
-
-    for (const examId of examIds) {
       try { await deleteDoc(doc(db, "exams", examId)); } catch {}
     }
 
@@ -5918,7 +5722,6 @@ async function deleteAccountFlow() {
     } catch {}
 
     try { await deleteDoc(doc(db, "userCredits", uidV)); } catch {}
-
     if (publicId) { try { await deleteDoc(doc(db, "publicIds", String(publicId))); } catch {} }
     if (normalized) { try { await deleteDoc(doc(db, "usernames", normalized)); } catch {} }
     try { await deleteDoc(doc(db, "users", uidV)); } catch {}
@@ -5926,87 +5729,125 @@ async function deleteAccountFlow() {
     clearProfileCache();
     stopCreditsListener();
 
-    try {
-      if (currentUser && currentUser.delete) await currentUser.delete();
-      else await fbSignOut(auth);
-    } catch { try { await fbSignOut(auth); } catch {} }
+    try { await deleteUser(currentUser); }
+    catch { try { await fbSignOut(auth); } catch {} }
 
-    currentUser = null; currentProfile = null; currentCredits = null;
+    currentUser = null; currentProfile = null; currentCredits = null; currentRole = null;
     hideGlobalLoading();
 
     openModal({
       title: "تم حذف الحساب",
       body: "تم حذف حسابك وجميع بياناتك بنجاح.",
-      actions: [{ label: "الرئيسية", class: "btn-primary", onClick: () => navigate("/") }]
+      actions: [{ label: "الرئيسية", class: "btn-primary", onClick: () => navigate("/login") }]
     });
   } catch (err) {
     console.error("[deleteAccount]", err);
     hideGlobalLoading();
-    toast("فشل حذف الحساب. حاول مرة أخرى.", "error");
+    toast("فشل حذف الحساب - تحقق من كلمة المرور", "error");
   }
 }
 
-function showDeleteStep1() {
-  return new Promise((resolve) => {
-    openModal({
-      title: "حذف الحساب",
-      body: el("div", { class: "stack-sm" }, [
-        el("p", { class: "text-secondary", text: "هل أنت متأكد من رغبتك في حذف حسابك؟" }),
-        el("div", { class: "card", style: "padding:var(--sp-4);background:var(--danger-50);border-color:var(--danger-500)" }, [
-          el("p", { class: "text-sm fw-semibold text-danger", text: "سيتم حذف ما يلي نهائيًا:" }),
-          el("ul", { style: "margin-top:8px;padding-inline-start:20px;line-height:2;font-size:var(--fs-sm)" }, [
-            el("li", { text: "جميع امتحاناتك" }),
-            el("li", { text: "جميع محاولات الطلاب" }),
-            el("li", { text: "جميع الإجابات والنتائج" }),
-            el("li", { text: "رصيد الكريدت وسجل المعاملات" }),
-            el("li", { text: "ملفك الشخصي واسم المستخدم والـ ID" })
-          ])
-        ]),
-        el("p", { class: "text-sm text-muted mt-3", text: "سيُطلب منك تسجيل الدخول مرة أخرى لتأكيد هويتك." })
-      ]),
-      actions: [
-        { label: "إلغاء", class: "btn-ghost", onClick: () => resolve(false) },
-        { label: "متابعة", class: "btn-danger", onClick: () => resolve(true) }
-      ],
-      onClose: () => resolve(false)
+/* ============================================================
+   ATTEMPT DETAILS
+   ============================================================ */
+function openAttemptDetails(attempt, exam) {
+  const events = (attempt.anticheatEvents || []).slice().sort((a, b) => (a.at || 0) - (b.at || 0));
+
+  const body = el("div", { class: "stack" });
+  const info = el("div", { class: "card", style: "background:var(--bg-subtle)" });
+  const totalPossible = exam.totalScore || 0;
+  [
+    ["الطالب", attempt.studentName || "-"],
+    ["الحالة", statusLabel(attempt.status || "draft")],
+    ["البدء", fmtDate(attempt.startedAt)],
+    ["التسليم", attempt.submittedAt ? fmtDate(attempt.submittedAt) : "-"],
+    ["الدرجة", attempt.score != null ? `${attempt.score} / ${totalPossible}` : "-"],
+    ["الفرص المتبقية", String(attempt.chancesLeft ?? 3)]
+  ].forEach(([k, v]) => {
+    info.appendChild(el("div", { class: "row-between", style: "padding:6px 0" }, [
+      el("span", { class: "text-sm text-muted", text: k }),
+      el("span", { class: "text-sm fw-semibold", text: v })
+    ]));
+  });
+  body.appendChild(info);
+
+  const timelineHeader = el("div", { class: "builder-panel-title", style: "margin-top:var(--sp-4)" });
+  timelineHeader.appendChild(document.createTextNode(`الأحداث (${events.length})`));
+  body.appendChild(timelineHeader);
+
+  if (!events.length) {
+    body.appendChild(el("div", { class: "empty", style: "padding:var(--sp-6)" }, [
+      el("p", { class: "text-muted", text: "لا توجد أحداث مسجلة." })
+    ]));
+  } else {
+    const timeline = el("div", { class: "attempt-timeline" });
+    events.slice(-50).forEach((evt) => {
+      const row = el("div", { class: "attempt-timeline-row" });
+      row.appendChild(el("div", { class: "text-sm fw-semibold", text: eventLabel(evt.type) }));
+      const time = new Date(evt.at || 0).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      row.appendChild(el("span", { class: "attempt-timeline-time", text: time }));
+      timeline.appendChild(row);
     });
+    body.appendChild(timeline);
+  }
+
+  openModal({
+    title: `تفاصيل جلسة - ${attempt.studentName || "طالب"}`,
+    body,
+    className: "attempt-details-modal",
+    actions: [
+      { label: "إغلاق", class: "btn-ghost" },
+      { label: "تصحيح الورقة", class: "btn-primary", onClick: () => navigate(`/app/grading?exam=${exam.id}&attempt=${attempt.id}`) }
+    ]
   });
 }
 
-function showDeleteStep2() {
-  return new Promise((resolve) => {
-    openModal({
-      title: "تأكيد نهائي",
-      body: el("div", { class: "stack-sm" }, [
-        el("p", { class: "text-secondary fw-semibold", text: "هذه العملية لا يمكن التراجع عنها." })
-      ]),
-      actions: [
-        { label: "إلغاء", class: "btn-ghost", onClick: () => resolve(false) },
-        { label: "حذف نهائي", class: "btn-danger", onClick: () => resolve(true) }
-      ],
-      onClose: () => resolve(false)
-    });
-  });
+function eventLabel(type) {
+  return {
+    leave_start: "خرج من التطبيق",
+    leave_penalty: "تم خصم فرصة",
+    leave_safe_return: "رجع للامتحان قبل انتهاء الوقت",
+    leave_acknowledged: "اعترف بالتحذير",
+    leave_chances_exhausted: "استنفد الفرص",
+    tab_hidden: "خرج من الصفحة",
+    tab_visible: "رجع للصفحة",
+    window_blur: "خرج من النافذة",
+    window_focus: "رجع للنافذة",
+    copy_attempt: "محاولة نسخ",
+    cut_attempt: "محاولة قص",
+    paste_blocked: "محاولة لصق",
+    context_menu: "فتح القائمة اليمنى",
+    printscreen_blocked: "محاولة PrintScreen",
+    devtools_open: "DevTools",
+    offline: "انقطع الاتصال",
+    online: "عاد الاتصال"
+  }[type] || type;
 }
 
 /* ============================================================
    ROUTES
    ============================================================ */
-onRoute("/", () => initLanding());
+onRoute("/", () => { /* handled by auth */ });
 onRoute("/login", () => initLogin());
-onRoute("/setup", () => initSetup());
 onRoute("/app/dashboard", async () => { await renderDashboard(); });
 onRoute("/app/exams", async () => { await renderMyExams(); });
+onRoute("/app/students", async () => { await renderStudentsPage(); });
 onRoute("/app/builder", async (p) => { await renderBuilder(p); });
 onRoute("/app/exam", async (p) => { await renderExamDetails(p); });
 onRoute("/app/grading", async (p) => { await renderGrading(p); });
 onRoute("/app/bank", () => {});
 onRoute("/app/ai-qeyas", () => {});
-onRoute("/app/profile", () => { renderProfile(); });
+onRoute("/app/profile", () => { renderTeacherProfile(); });
 onRoute("/app/settings", () => { renderSettings(); });
 onRoute("/app/credits", async () => { await renderCreditsPage(); });
 onRoute("/app/subscription", () => { renderSubscriptionPage(); });
 onRoute("/app/checkout", () => { renderCheckoutPage(); });
+onRoute("/student/dashboard", async () => { await renderStudentDashboard(); });
+onRoute("/student/teachers", async () => { await renderStudentTeachers(); });
+onRoute("/student/masters", async () => { await renderStudentMasters(); });
+onRoute("/student/history", async () => { await renderStudentHistory(); });
+onRoute("/student/join", async () => { await renderStudentJoin(); });
+onRoute("/student/profile", () => { updateUserUI(); });
 onRoute("/exam", async (p) => { await renderExam(p); });
 onRoute("/result", async () => { await renderResult(); });
 
@@ -6024,7 +5865,7 @@ document.addEventListener("click", (e) => {
 
   const copyIdBtn = e.target.closest("[data-copy-id]");
   if (copyIdBtn) {
-    const pid = currentProfile?.publicId;
+    const pid = currentProfile?.publicId || currentStudentProfile?.publicId;
     if (pid) { navigator.clipboard.writeText(String(pid)); toast("تم نسخ الـ ID", "success"); }
     return;
   }
@@ -6034,21 +5875,6 @@ document.addEventListener("click", (e) => {
     if (refreshBtn.disabled) return;
     refreshBtn.disabled = true;
     refreshBtn.classList.add("is-loading");
-    const span = refreshBtn.querySelector("span");
-    const originalText = span?.textContent || "تحديث";
-    let countdown = 5;
-    const tick = () => {
-      if (span) span.textContent = `تحديث (${countdown})`;
-      countdown--;
-      if (countdown < 0) {
-        refreshBtn.disabled = false;
-        refreshBtn.classList.remove("is-loading");
-        if (span) span.textContent = originalText;
-        return;
-      }
-      setTimeout(tick, 1000);
-    };
-    tick();
     setTimeout(() => location.reload(), 300);
     return;
   }
@@ -6093,13 +5919,11 @@ window.addEventListener("offline", () => {
   setThree(currentThree);
   initThreeBackground();
   initAntiCopy();
-  bindEntryHandlers();
 
-  const hash = location.hash || "";
-  const wasLoggedIn = localStorage.getItem(PROFILE_CACHE_KEY);
-  const goingToApp = hash.includes("/app/") && !wasLoggedIn;
-
-  if (goingToApp) showGlobalLoading("جارٍ التحميل…");
+  if (!navigator.onLine) {
+    const b = $("[data-offline-banner]");
+    if (b) b.hidden = false;
+  }
 
   handleRoute();
 })();
